@@ -1,0 +1,47 @@
+# Default configuration for Texas Hold'em RL Bot
+
+# Environment settings
+environment:
+  num_players: 6
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  rake_enabled: false
+  rake_percent: 0.05  # 5% rake when enabled
+  rake_cap: 5  # Maximum rake per hand
+  
+# Training settings
+training:
+  total_timesteps: 1000000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 64
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  
+# PPO settings
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+  
+# Self-play settings
+self_play:
+  opponent_pool_size: 5  # Number of past agent versions to keep
+  update_frequency: 10000  # Update opponent pool every N steps
+  
+# Evaluation settings
+evaluation:
+  eval_frequency: 10000
+  n_eval_episodes: 100
+  
+# Logging
+logging:
+  log_dir: "./logs/"
+  save_frequency: 50000
+  model_dir: "./models/"
