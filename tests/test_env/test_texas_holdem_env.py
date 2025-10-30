@@ -23,7 +23,7 @@ class TestTexasHoldemEnv:
     
     def test_reset(self, env):
         """Test environment reset"""
-        obs = env.reset()
+        obs, info = env.reset()
         
         # Check observation shape
         assert obs.shape == env.observation_space.shape
@@ -45,7 +45,7 @@ class TestTexasHoldemEnv:
     
     def test_observation_space(self, env):
         """Test observation space"""
-        obs = env.reset()
+        obs, info = env.reset()
         assert env.observation_space.contains(obs)
     
     def test_step(self, env):
@@ -79,7 +79,7 @@ class TestTexasHoldemEnv:
     def test_multiple_hands(self, env):
         """Test playing multiple hands"""
         for hand in range(3):
-            obs = env.reset()
+            obs, info = env.reset()
             assert env.game_state.hand_number == hand + 1
             
             done = False
@@ -180,7 +180,7 @@ class TestTexasHoldemEnv:
         """Test with different numbers of players"""
         for num_players in [2, 6, 10]:
             env = TexasHoldemEnv(num_players=num_players)
-            obs = env.reset()
+            obs, info = env.reset()
             assert len(env.game_state.players) == num_players
     
     def test_invalid_player_count(self):
@@ -199,7 +199,7 @@ class TestTexasHoldemEnv:
             rake_cap=10
         )
         
-        obs = env.reset()
+        obs, info = env.reset()
         assert env.game_state.pot_manager.rake_percent == 0.05
 
 

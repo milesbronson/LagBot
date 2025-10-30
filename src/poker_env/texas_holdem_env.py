@@ -88,16 +88,19 @@ class TexasHoldemEnv(gym.Env):
         """Get current raise bin percentages"""
         return self.raise_bins.copy()
     
-    def reset(self) -> np.ndarray:
+    def reset(self, seed: int = None, options: dict = None) -> Tuple[np.ndarray, dict]:
         """Reset for new hand"""
+        if seed is not None:
+            np.random.seed(seed)
+        
         for player in self.game_state.players:
             if player.stack <= 0:
                 player.stack = self.starting_stack
         
         self.game_state.start_new_hand()
-        return self._get_observation()
+        return self._get_observation(), {}
     
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute action"""
         current_player = self.game_state.get_current_player()
         starting_stack = current_player.stack + current_player.total_bet_this_hand
@@ -119,7 +122,9 @@ class TexasHoldemEnv(gym.Env):
             info['winnings'] = winnings
             info['hand_complete'] = True
         
-        return self._get_observation(), reward, done, info
+        terminated = done
+        truncated = False
+        return self._get_observation(), reward, terminated, truncated, info
     
     def _validate_and_convert_action(self, action: int) -> Tuple[int, Optional[int]]:
         """Convert raw action to (action_type, raise_amount)"""
@@ -217,7 +222,9 @@ class TexasHoldemEnv(gym.Env):
             info['winnings'] = winnings
             info['hand_complete'] = True
         
-        return self._get_observation(), reward, done, info
+        terminated = done
+        truncated = False
+        return self._get_observation(), reward, terminated, truncated, info
     
     def _get_observation(self) -> np.ndarray:
         """Get observation vector"""

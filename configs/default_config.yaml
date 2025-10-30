@@ -8,6 +8,9 @@ environment:
   small_blind: 5
   big_blind: 10
   min_raise_multiplier: 2.0  # 2x big blind rule
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
 
 # Training settings
 training:

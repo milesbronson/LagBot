@@ -166,7 +166,7 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
                 print("="*60)
                 break
             
-            obs = env.reset()
+            obs, info = env.reset()
             
             print(f"\n{'='*60}")
             print(f"HAND #{hand_number}")
