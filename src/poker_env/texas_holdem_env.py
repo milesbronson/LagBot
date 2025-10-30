@@ -1,11 +1,11 @@
 """
-OpenAI Gym environment for Texas Hold'em Poker
+OpenAI Gym environment with pot-based raise actions + all-in
 """
 
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 
 from src.poker_env.game_state import GameState, BettingRound
 from src.poker_env.hand_evaluator import HandEvaluator
@@ -13,24 +13,13 @@ from src.poker_env.hand_evaluator import HandEvaluator
 
 class TexasHoldemEnv(gym.Env):
     """
-    Texas Hold'em Poker environment compatible with OpenAI Gym
+    Texas Hold'em with pot-based raise bins + all-in action.
     
-    Observation Space:
-        - Player's hole cards (2 cards encoded)
-        - Community cards (5 cards encoded, padded with zeros)
-        - Player's stack
-        - Player's current bet
-        - Pot size
-        - Current bet to call
-        - Number of active players
-        - Position information
-        - Betting round
-        
-    Action Space:
-        Discrete(3):
-            0: Fold
-            1: Check/Call
-            2: Raise (minimum raise)
+    Action Space: Discrete(2 + len(raise_bins) + 1)
+    - 0: Fold
+    - 1: Check/Call  
+    - 2 to N-1: Raise by bin[0], bin[1], ... (pot-based percentages)
+    - N: All-in
     """
     
     metadata = {'render.modes': ['human']}
@@ -43,28 +32,27 @@ class TexasHoldemEnv(gym.Env):
         big_blind: int = 10,
         rake_percent: float = 0.0,
         rake_cap: int = 0,
-        min_raise_multiplier: float = 1.0
+        min_raise_multiplier: float = 1.0,
+        raise_bins: Optional[List[float]] = None,
+        include_all_in: bool = True
     ):
         """
-        Initialize the Texas Hold'em environment
-        
         Args:
-            num_players: Number of players at the table (2-10)
-            starting_stack: Starting chip stack
-            small_blind: Small blind amount
-            big_blind: Big blind amount
-            rake_percent: Rake percentage (0.0 to 1.0)
-            rake_cap: Maximum rake per hand
-            min_raise_multiplier: Multiplier for minimum raise (e.g., 2.0 for 2x rule)
+            raise_bins: List of pot percentages (e.g., [0.5, 1.0, 2.0])
+            include_all_in: If True, add all-in as last action
         """
         super().__init__()
+        
+        if not 2 <= num_players <= 10:
+            raise ValueError("Number of players must be between 2 and 10")
         
         self.num_players = num_players
         self.starting_stack = starting_stack
         self.small_blind = small_blind
         self.big_blind = big_blind
+        self.raise_bins = raise_bins if raise_bins else [0.5, 1.0, 2.0]
+        self.include_all_in = include_all_in
         
-        # Initialize game state
         self.game_state = GameState(
             num_players=num_players,
             starting_stack=starting_stack,
@@ -72,39 +60,36 @@ class TexasHoldemEnv(gym.Env):
             big_blind=big_blind,
             rake_percent=rake_percent,
             rake_cap=rake_cap,
-            min_raise_multiplier=min_raise_multiplier
+            min_raise_multiplier=min_raise_multiplier,
+            raise_bins=self.raise_bins
         )
         
-        # Define action space: [Fold, Check/Call, Raise]
-        self.action_space = spaces.Discrete(3)
+        # Action space: Fold, Call, + raise bins + all-in
+        num_raise_actions = len(self.raise_bins)
+        num_all_in = 1 if include_all_in else 0
+        self.action_space = spaces.Discrete(2 + num_raise_actions + num_all_in)
         
-        # Define observation space
-        # Cards: 2 hole + 5 community = 7 cards * 4 (suit encoding)
-        # Stack info: player stack, pot size, current bet, call amount
-        # Game info: num active players, position, betting round, button position
-        obs_size = (
-            7 * 4 +  # Cards (one-hot encoded by suit/rank)
-            4 +      # Stack information
-            4        # Game information
-        )
-        
+        obs_size = 7 * 4 + 4 + 4
         self.observation_space = spaces.Box(
-            low=0,
-            high=np.inf,
-            shape=(obs_size,),
-            dtype=np.float32
+            low=0, high=np.inf, shape=(obs_size,), dtype=np.float32
         )
         
-        self.current_agent = 0  # Which agent is learning (0 by default)
+        self.current_agent = 0
         
+    def set_raise_bins(self, raise_bins: List[float]):
+        """Update raise bins and action space"""
+        self.raise_bins = sorted(raise_bins)
+        self.game_state.pot_manager.set_raise_bins(self.raise_bins)
+        num_raise_actions = len(self.raise_bins)
+        num_all_in = 1 if self.include_all_in else 0
+        self.action_space = spaces.Discrete(2 + num_raise_actions + num_all_in)
+        
+    def get_raise_bins(self) -> List[float]:
+        """Get current raise bin percentages"""
+        return self.raise_bins.copy()
+    
     def reset(self) -> np.ndarray:
-        """
-        Reset the environment for a new hand
-        
-        Returns:
-            Initial observation
-        """
-        # Check if any players are out of chips
+        """Reset for new hand"""
         for player in self.game_state.players:
             if player.stack <= 0:
                 player.stack = self.starting_stack
@@ -113,207 +98,162 @@ class TexasHoldemEnv(gym.Env):
         return self._get_observation()
     
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
-        """
-        Execute an action in the environment
-        
-        Args:
-            action: Action to take (0=fold, 1=check/call, 2=raise)
-            
-        Returns:
-            Tuple of (observation, reward, done, info)
-        """
+        """Execute action"""
         current_player = self.game_state.get_current_player()
         starting_stack = current_player.stack + current_player.total_bet_this_hand
         
-        # Validate action
-        action = self._validate_action(action)
-        
-        # Execute action
-        action_type = self.game_state.execute_action(action)
-        
-        # Check if betting round is complete
-        if self.game_state.is_betting_round_complete():
-            if not self.game_state.is_hand_complete():
-                self.game_state.advance_betting_round()
-        
-        # Check if hand is complete
-        done = self.game_state.is_hand_complete()
-        
-        # Calculate reward
-        reward = 0.0
-        info = {'action': action_type}
-        
-        if done:
-            # Determine winners and distribute chips
-            winnings = self.game_state.determine_winners()
-            
-            # Reward is change in stack
-            final_stack = current_player.stack
-            reward = float(final_stack - starting_stack)
-            
-            info['winnings'] = winnings
-            info['hand_complete'] = True
-        
-        observation = self._get_observation()
-        
-        return observation, reward, done, info
-    
-    def step_with_raise(self, action: int, raise_amount: Optional[int] = None) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
-        """
-        Execute an action with custom raise amount
-        
-        Args:
-            action: Action to take (0=fold, 1=check/call, 2=raise)
-            raise_amount: Custom raise amount (if None, uses minimum)
-            
-        Returns:
-            Tuple of (observation, reward, done, info)
-        """
-        current_player = self.game_state.get_current_player()
-        starting_stack = current_player.stack + current_player.total_bet_this_hand
-        
-        # Validate action
-        action = self._validate_action(action)
-        
-        # Execute action with custom raise amount
+        action, raise_amount = self._validate_and_convert_action(action)
         action_type = self.game_state.execute_action(action, raise_amount)
         
-        # Check if betting round is complete
         if self.game_state.is_betting_round_complete():
             if not self.game_state.is_hand_complete():
                 self.game_state.advance_betting_round()
         
-        # Check if hand is complete
         done = self.game_state.is_hand_complete()
+        reward = 0.0
+        info = {'action': action_type, 'raise_bins': self.raise_bins}
         
-        # Calculate reward
+        if done:
+            winnings = self.game_state.determine_winners()
+            reward = float(current_player.stack - starting_stack)
+            info['winnings'] = winnings
+            info['hand_complete'] = True
+        
+        return self._get_observation(), reward, done, info
+    
+    def _validate_and_convert_action(self, action: int) -> Tuple[int, Optional[int]]:
+        """Convert raw action to (action_type, raise_amount)"""
+        if action == 0:
+            return 0, None
+        elif action == 1:
+            return 1, None
+        else:
+            # Check if this is all-in action
+            last_action_idx = 2 + len(self.raise_bins)
+            if self.include_all_in and action == last_action_idx:
+                # All-in action
+                player = self.game_state.get_current_player()
+                return 2, player.stack  # Raise by entire stack
+            
+            # Otherwise it's a raise bin action
+            bin_idx = action - 2
+            if bin_idx >= len(self.raise_bins):
+                return 1, None  # Invalid, default to call
+            
+            player = self.game_state.get_current_player()
+            pot = self.game_state.pot_manager.get_pot_total()
+            to_call = self.game_state.pot_manager.current_bet - player.current_bet
+            
+            raise_chips = int(pot * self.raise_bins[bin_idx])
+            raise_chips = self.game_state.pot_manager._round_to_big_blind(raise_chips)
+            
+            if raise_chips < self.game_state.pot_manager.min_raise:
+                raise_chips = self.game_state.pot_manager.min_raise
+            
+            if raise_chips > player.stack:
+                if player.stack > to_call:
+                    raise_chips = player.stack
+                else:
+                    return 1, None
+            
+            return 2, to_call + raise_chips
+    
+    def get_valid_actions(self) -> List[int]:
+        """Get valid actions for current player"""
+        player = self.game_state.get_current_player()
+        pot = self.game_state.pot_manager.get_pot_total()
+        to_call = self.game_state.pot_manager.current_bet - player.current_bet
+        
+        valid = [0, 1]
+        
+        for i, bin_pct in enumerate(self.raise_bins):
+            raise_amt = int(pot * bin_pct)
+            raise_amt = self.game_state.pot_manager._round_to_big_blind(raise_amt)
+            
+            if to_call + raise_amt <= player.stack + to_call:
+                valid.append(2 + i)
+        
+        # Add all-in if available and player has chips
+        if self.include_all_in and player.stack > 0:
+            all_in_idx = 2 + len(self.raise_bins)
+            valid.append(all_in_idx)
+        
+        return valid
+    
+    def get_action_description(self, action: int) -> str:
+        """Human-readable action name"""
+        if action == 0:
+            return "Fold"
+        elif action == 1:
+            return "Check/Call"
+        else:
+            last_idx = 2 + len(self.raise_bins)
+            if self.include_all_in and action == last_idx:
+                return "All-in"
+            
+            idx = action - 2
+            if idx < len(self.raise_bins):
+                return f"Raise {self.raise_bins[idx]*100:.0f}% pot"
+        return f"Action {action}"
+    
+    def step_with_raise(self, action: int, raise_amount: Optional[int] = None) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
+        """Execute action with custom raise amount (for humans)"""
+        current_player = self.game_state.get_current_player()
+        starting_stack = current_player.stack + current_player.total_bet_this_hand
+        
+        action_type = self.game_state.execute_action(action, raise_amount)
+        
+        if self.game_state.is_betting_round_complete():
+            if not self.game_state.is_hand_complete():
+                self.game_state.advance_betting_round()
+        
+        done = self.game_state.is_hand_complete()
         reward = 0.0
         info = {'action': action_type}
         
         if done:
-            # Determine winners and distribute chips
             winnings = self.game_state.determine_winners()
-            
-            # Reward is change in stack
-            final_stack = current_player.stack
-            reward = float(final_stack - starting_stack)
-            
+            reward = float(current_player.stack - starting_stack)
             info['winnings'] = winnings
             info['hand_complete'] = True
         
-        observation = self._get_observation()
-        
-        return observation, reward, done, info
-    
-    def _validate_action(self, action: int) -> int:
-        """
-        Validate and potentially modify an action
-        
-        Args:
-            action: Proposed action
-            
-        Returns:
-            Valid action
-        """
-        current_player = self.game_state.get_current_player()
-        to_call = self.game_state.pot_manager.current_bet - current_player.current_bet
-        
-        # If player wants to raise but doesn't have enough chips, convert to call
-        if action == 2:  # Raise
-            min_raise = self.game_state.pot_manager.min_raise
-            if current_player.stack < to_call + min_raise:
-                action = 1  # Convert to call/all-in
-        
-        # If current bet is 0, can't fold (should check instead)
-        if action == 0 and to_call == 0:
-            action = 1  # Convert to check
-        
-        return action
-    
-    def get_valid_raise_range(self) -> Tuple[int, int]:
-        """
-        Get valid raise range for current player
-        
-        Returns:
-            Tuple of (min_raise, max_raise)
-        """
-        current_player = self.game_state.get_current_player()
-        return self.game_state.pot_manager.get_valid_raise_range(current_player)
+        return self._get_observation(), reward, done, info
     
     def _get_observation(self) -> np.ndarray:
-        """
-        Get the current observation
+        """Get observation vector"""
+        player = self.game_state.get_current_player()
         
-        Returns:
-            Observation array
-        """
-        current_player = self.game_state.get_current_player()
-        
-        # Encode cards
-        hole_cards_encoded = self._encode_cards(current_player.hand)
-        community_cards_encoded = self._encode_cards(
-            self.game_state.community_cards + [0] * (5 - len(self.game_state.community_cards))
+        hole = self._encode_cards(player.hand)
+        comm = self._encode_cards(
+            self.game_state.community_cards + [0]*(5-len(self.game_state.community_cards))
         )
         
-        # Stack information (normalized)
-        player_stack = current_player.stack / self.starting_stack
-        pot_size = self.game_state.pot_manager.get_pot_total() / self.starting_stack
-        current_bet = current_player.current_bet / self.starting_stack
-        to_call = (self.game_state.pot_manager.current_bet - current_player.current_bet) / self.starting_stack
+        stack = player.stack / self.starting_stack
+        pot = self.game_state.pot_manager.get_pot_total() / self.starting_stack
+        bet = player.current_bet / self.starting_stack
+        call = (self.game_state.pot_manager.current_bet - player.current_bet) / self.starting_stack
         
-        # Game information
-        num_active = len(self.game_state.get_active_players()) / self.num_players
-        position = self.game_state.current_player_idx / self.num_players
-        betting_round = self.game_state.betting_round.value / 4  # Normalize to 0-1
-        button_pos = self.game_state.button_position / self.num_players
+        active = len(self.game_state.get_active_players()) / self.num_players
+        pos = self.game_state.current_player_idx / self.num_players
+        rnd = self.game_state.betting_round.value / 4
+        btn = self.game_state.button_position / self.num_players
         
-        # Combine all features
-        observation = np.concatenate([
-            hole_cards_encoded,
-            community_cards_encoded,
-            [player_stack, pot_size, current_bet, to_call],
-            [num_active, position, betting_round, button_pos]
-        ]).astype(np.float32)
-        
-        return observation
+        return np.concatenate([hole, comm, [stack, pot, bet, call], [active, pos, rnd, btn]]).astype(np.float32)
     
     def _encode_cards(self, cards: list) -> np.ndarray:
-        """
-        Encode cards as numerical features
-        
-        Args:
-            cards: List of card integers (treys format)
-            
-        Returns:
-            Encoded card features
-        """
-        encoded = []
-        
-        for card in cards:
-            if card == 0:  # Empty card slot
-                encoded.extend([0, 0, 0, 0])
+        """Encode cards"""
+        enc = []
+        for c in cards:
+            if c == 0:
+                enc.extend([0, 0, 0, 0])
             else:
-                # Extract rank and suit from treys card format
-                # Treys uses bit representation: rank in bits 0-3, suit in bits 12-15
-                rank = (card >> 8) & 0xFF  # Simplified rank extraction
-                suit = (card >> 12) & 0xF
-                
-                # Normalize rank (2-14) and suit (0-3)
-                rank_norm = rank / 14.0
-                suit_norm = suit / 4.0
-                
-                # Create simple encoding
-                encoded.extend([rank_norm, suit_norm, 1.0, 0.0])  # Card present indicator
-        
-        return np.array(encoded)
+                r = (c >> 8) & 0xFF
+                s = (c >> 12) & 0xF
+                enc.extend([r/14.0, s/4.0, 1.0, 0.0])
+        return np.array(enc)
     
     def render(self, mode='human'):
-        """
-        Render the current game state
-        
-        Args:
-            mode: Rendering mode
-        """
+        """Render game state"""
         if mode != 'human':
             return
         
@@ -321,70 +261,30 @@ class TexasHoldemEnv(gym.Env):
         print(f"Hand #{self.game_state.hand_number} - {self.game_state.betting_round.name}")
         print("="*60)
         
-        # Show community cards
         if self.game_state.community_cards:
-            community_str = " ".join([
-                HandEvaluator.card_to_string(c) 
-                for c in self.game_state.community_cards
-            ])
-            print(f"Community Cards: {community_str}")
+            comm = " ".join([HandEvaluator.card_to_string(c) for c in self.game_state.community_cards])
+            print(f"Community: {comm}")
         else:
-            print("Community Cards: (none yet)")
+            print("Community: (none yet)")
         
         print(f"Pot: ${self.game_state.pot_manager.get_pot_total()}")
-        print(f"Current Bet: ${self.game_state.pot_manager.current_bet}")
-        print(f"Min Raise: ${self.game_state.pot_manager.min_raise}")
+        print(f"Bet: ${self.game_state.pot_manager.current_bet}, Min Raise: ${self.game_state.pot_manager.min_raise}")
         print()
         
-        # Show all players
-        for i, player in enumerate(self.game_state.players):
-            marker = "→ " if i == self.game_state.current_player_idx else "  "
-            button = "(BTN) " if i == self.game_state.button_position else ""
-            status = ""
+        for i, p in enumerate(self.game_state.players):
+            mk = "→ " if i == self.game_state.current_player_idx else "  "
+            bn = "(BTN) " if i == self.game_state.button_position else ""
+            st = ""
             
-            if not player.is_active:
-                status = " [FOLDED]"
-            elif player.is_all_in:
-                status = " [ALL-IN]"
+            if not p.is_active:
+                st = " [FOLDED]"
+            elif p.is_all_in:
+                st = " [ALL-IN]"
             
-            # Only show hole cards for current player
-            if i == self.current_agent and player.hand:
-                cards_str = " ".join([HandEvaluator.card_to_string(c) for c in player.hand])
-            else:
-                cards_str = "## ##" if player.is_active else "-- --"
-            
-            print(f"{marker}{button}{player.name}: ${player.stack} (Bet: ${player.current_bet}) [{cards_str}]{status}")
+            cards = " ".join([HandEvaluator.card_to_string(c) for c in p.hand]) if i == self.current_agent and p.hand else ("## ##" if p.is_active else "-- --")
+            print(f"{mk}{bn}{p.name}: ${p.stack} (Bet: ${p.current_bet}) [{cards}]{st}")
         
         print("="*60 + "\n")
     
     def close(self):
-        """Clean up environment resources"""
         pass
-
-
-# Example usage
-if __name__ == "__main__":
-    # Create environment
-    env = TexasHoldemEnv(num_players=3, min_raise_multiplier=2.0)
-    
-    # Reset environment
-    obs = env.reset()
-    print(f"Observation shape: {obs.shape}")
-    
-    # Render initial state
-    env.render()
-    
-    # Play a few random actions
-    done = False
-    step_count = 0
-    
-    while not done and step_count < 20:
-        action = env.action_space.sample()
-        obs, reward, done, info = env.step(action)
-        
-        print(f"\nStep {step_count + 1}: Action={action}, Reward={reward:.2f}")
-        env.render()
-        
-        step_count += 1
-    
-    print(f"\nHand complete! Final info: {info}")

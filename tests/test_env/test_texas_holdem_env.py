@@ -35,7 +35,13 @@ class TestTexasHoldemEnv:
     
     def test_action_space(self, env):
         """Test action space"""
-        assert env.action_space.n == 3  # Fold, Call, Raise
+        # With default raise_bins=[0.5, 1.0, 2.0] and include_all_in=True:
+        # 0: Fold, 1: Call, 2-4: Raise bins (50%, 100%, 200% pot), 5: All-in
+        assert env.action_space.n == 6
+
+        # Verify raise bins are set correctly
+        assert env.raise_bins == [0.5, 1.0, 2.0]
+        assert env.include_all_in == True
     
     def test_observation_space(self, env):
         """Test observation space"""
@@ -132,17 +138,34 @@ class TestTexasHoldemEnv:
         assert done or env.game_state.betting_round.value >= initial_round.value
     
     def test_validate_action(self, env):
-        """Test action validation"""
+        """Test action validation with pot-based raise bins"""
         env.reset()
-        
-        # Set up a scenario where player can't raise
+
+        # Test 1: Normal raise action conversion
+        # Action 2 should be the first raise bin (50% pot)
+        action_type, raise_amount = env._validate_and_convert_action(2)
+        assert action_type == 2  # Raise action
+        assert raise_amount is not None
+
+        # Test 2: Player with insufficient stack for raise should fall back to call
         player = env.game_state.get_current_player()
+        original_stack = player.stack
         player.stack = 5  # Very small stack
         env.game_state.pot_manager.current_bet = 100
-        
-        # Try to raise - should be converted to call
-        validated_action = env._validate_action(2)
-        assert validated_action == 1  # Should convert to call
+
+        # Try to raise with insufficient chips - should convert to call
+        action_type, raise_amount = env._validate_and_convert_action(2)
+        assert action_type == 1  # Should convert to call
+        assert raise_amount is None
+
+        # Restore stack for other tests
+        player.stack = original_stack
+
+        # Test 3: All-in action (last action in space)
+        all_in_action = 2 + len(env.raise_bins)  # Should be action 5 with default bins
+        action_type, raise_amount = env._validate_and_convert_action(all_in_action)
+        assert action_type == 2  # Raise (all-in is a raise)
+        assert raise_amount == player.stack  # Should raise entire stack
     
     def test_render(self, env):
         """Test rendering (should not crash)"""
