@@ -55,12 +55,14 @@ def train(config_path: str, run_name: str = None):
         small_blind=env_config['small_blind'],
         big_blind=env_config['big_blind'],
         rake_percent=env_config['rake_percent'] if env_config['rake_enabled'] else 0.0,
-        rake_cap=env_config.get('rake_cap', 0)
+        rake_cap=env_config.get('rake_cap', 0),
+        min_raise_multiplier=env_config.get('min_raise_multiplier', 1.0)
     )
     
     print(f"Environment: {env_config['num_players']} players, "
           f"Starting stack: ${env_config['starting_stack']}, "
           f"Blinds: ${env_config['small_blind']}/${env_config['big_blind']}")
+    print(f"Min raise multiplier: {env_config.get('min_raise_multiplier', 1.0)}x")
     print()
     
     # Create agent

@@ -26,7 +26,7 @@ class PotManager:
     Manages betting, pots, and side pots for a poker game
     """
     
-    def __init__(self, small_blind: int, big_blind: int, rake_percent: float = 0.0, rake_cap: int = 0):
+    def __init__(self, small_blind: int, big_blind: int, rake_percent: float = 0.0, rake_cap: int = 0, min_raise_multiplier: float = 1.0):
         """
         Initialize the pot manager
         
@@ -35,21 +35,25 @@ class PotManager:
             big_blind: Big blind amount
             rake_percent: Percentage of pot to take as rake (0.0 to 1.0)
             rake_cap: Maximum rake amount per hand
+            min_raise_multiplier: Multiplier for minimum raise (e.g., 2.0 for 2x rule)
         """
         self.small_blind = small_blind
         self.big_blind = big_blind
         self.rake_percent = rake_percent
         self.rake_cap = rake_cap
+        self.min_raise_multiplier = min_raise_multiplier
         
         self.pots: List[Pot] = []
         self.current_bet = 0
         self.min_raise = big_blind
+        self.last_raise_amount = 0  # Track last raise for multiplier calculation
         
     def start_new_hand(self):
         """Reset pot manager for a new hand"""
         self.pots = [Pot()]
         self.current_bet = 0
         self.min_raise = self.big_blind
+        self.last_raise_amount = 0
         
     def post_blinds(self, small_blind_player: Player, big_blind_player: Player):
         """
@@ -64,6 +68,7 @@ class PotManager:
         
         self.pots[0].add_chips(sb_amount + bb_amount)
         self.current_bet = self.big_blind
+        self.last_raise_amount = self.big_blind
         
     def place_bet(self, player: Player, amount: int) -> Tuple[int, str]:
         """
@@ -71,7 +76,7 @@ class PotManager:
         
         Args:
             player: The player making the bet
-            amount: Amount to bet
+            amount: Amount to bet (total contribution from player)
             
         Returns:
             Tuple of (actual_amount_bet, action_type)
@@ -80,13 +85,23 @@ class PotManager:
         if amount == 0 and self.current_bet == player.current_bet:
             return 0, "check"
         
-        if amount < self.current_bet - player.current_bet:
+        to_call = self.current_bet - player.current_bet
+        
+        if amount < to_call:
             # Not enough to call, must be folding
             player.fold()
             return 0, "fold"
         
-        # Calculate how much more the player needs to put in
-        to_call = self.current_bet - player.current_bet
+        # Validate raise amount if raising
+        if amount > to_call:
+            raise_amount = amount - to_call
+            # Check if raise meets minimum
+            if raise_amount < self.min_raise and player.stack > 0:
+                # Not enough to make valid raise
+                player.fold()
+                return 0, "fold"
+        
+        # Place the bet
         actual_bet = player.bet(amount)
         
         # Add to pot
@@ -100,7 +115,9 @@ class PotManager:
             # This is a raise
             raise_amount = actual_bet - to_call
             self.current_bet = player.current_bet
-            self.min_raise = max(self.min_raise, raise_amount)
+            self.last_raise_amount = raise_amount
+            # Update min_raise based on multiplier
+            self.min_raise = int(raise_amount * self.min_raise_multiplier)
             action = "raise"
         else:
             action = "call"  # Partial call (shouldn't happen in proper play)
@@ -119,8 +136,33 @@ class PotManager:
             player.reset_current_bet()
         
         self.current_bet = 0
-        self.min_raise = self.big_blind
+        self.min_raise = int(self.big_blind * self.min_raise_multiplier)
+        self.last_raise_amount = 0
         
+    def get_valid_raise_range(self, player: Player) -> Tuple[int, int]:
+        """
+        Get valid raise range for a player
+        
+        Args:
+            player: The player
+            
+        Returns:
+            Tuple of (min_raise, max_raise)
+        """
+        to_call = self.current_bet - player.current_bet
+        
+        # Minimum raise
+        min_raise_amount = self.min_raise
+        
+        # Maximum raise (all-in)
+        max_raise_amount = to_call + player.stack
+        
+        # Can't raise if can only call or less
+        if max_raise_amount < to_call + min_raise_amount:
+            return 0, 0
+        
+        return min_raise_amount, max_raise_amount
+    
     def calculate_side_pots(self, players: List[Player]) -> List[Pot]:
         """
         Calculate main pot and side pots

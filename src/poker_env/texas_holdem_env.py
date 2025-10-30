@@ -2,8 +2,8 @@
 OpenAI Gym environment for Texas Hold'em Poker
 """
 
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
 from typing import Tuple, Dict, Any, Optional
 
@@ -42,7 +42,8 @@ class TexasHoldemEnv(gym.Env):
         small_blind: int = 5,
         big_blind: int = 10,
         rake_percent: float = 0.0,
-        rake_cap: int = 0
+        rake_cap: int = 0,
+        min_raise_multiplier: float = 1.0
     ):
         """
         Initialize the Texas Hold'em environment
@@ -54,6 +55,7 @@ class TexasHoldemEnv(gym.Env):
             big_blind: Big blind amount
             rake_percent: Rake percentage (0.0 to 1.0)
             rake_cap: Maximum rake per hand
+            min_raise_multiplier: Multiplier for minimum raise (e.g., 2.0 for 2x rule)
         """
         super().__init__()
         
@@ -69,7 +71,8 @@ class TexasHoldemEnv(gym.Env):
             small_blind=small_blind,
             big_blind=big_blind,
             rake_percent=rake_percent,
-            rake_cap=rake_cap
+            rake_cap=rake_cap,
+            min_raise_multiplier=min_raise_multiplier
         )
         
         # Define action space: [Fold, Check/Call, Raise]
@@ -155,6 +158,53 @@ class TexasHoldemEnv(gym.Env):
         
         return observation, reward, done, info
     
+    def step_with_raise(self, action: int, raise_amount: Optional[int] = None) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
+        """
+        Execute an action with custom raise amount
+        
+        Args:
+            action: Action to take (0=fold, 1=check/call, 2=raise)
+            raise_amount: Custom raise amount (if None, uses minimum)
+            
+        Returns:
+            Tuple of (observation, reward, done, info)
+        """
+        current_player = self.game_state.get_current_player()
+        starting_stack = current_player.stack + current_player.total_bet_this_hand
+        
+        # Validate action
+        action = self._validate_action(action)
+        
+        # Execute action with custom raise amount
+        action_type = self.game_state.execute_action(action, raise_amount)
+        
+        # Check if betting round is complete
+        if self.game_state.is_betting_round_complete():
+            if not self.game_state.is_hand_complete():
+                self.game_state.advance_betting_round()
+        
+        # Check if hand is complete
+        done = self.game_state.is_hand_complete()
+        
+        # Calculate reward
+        reward = 0.0
+        info = {'action': action_type}
+        
+        if done:
+            # Determine winners and distribute chips
+            winnings = self.game_state.determine_winners()
+            
+            # Reward is change in stack
+            final_stack = current_player.stack
+            reward = float(final_stack - starting_stack)
+            
+            info['winnings'] = winnings
+            info['hand_complete'] = True
+        
+        observation = self._get_observation()
+        
+        return observation, reward, done, info
+    
     def _validate_action(self, action: int) -> int:
         """
         Validate and potentially modify an action
@@ -179,6 +229,16 @@ class TexasHoldemEnv(gym.Env):
             action = 1  # Convert to check
         
         return action
+    
+    def get_valid_raise_range(self) -> Tuple[int, int]:
+        """
+        Get valid raise range for current player
+        
+        Returns:
+            Tuple of (min_raise, max_raise)
+        """
+        current_player = self.game_state.get_current_player()
+        return self.game_state.pot_manager.get_valid_raise_range(current_player)
     
     def _get_observation(self) -> np.ndarray:
         """
@@ -273,6 +333,7 @@ class TexasHoldemEnv(gym.Env):
         
         print(f"Pot: ${self.game_state.pot_manager.get_pot_total()}")
         print(f"Current Bet: ${self.game_state.pot_manager.current_bet}")
+        print(f"Min Raise: ${self.game_state.pot_manager.min_raise}")
         print()
         
         # Show all players
@@ -304,7 +365,7 @@ class TexasHoldemEnv(gym.Env):
 # Example usage
 if __name__ == "__main__":
     # Create environment
-    env = TexasHoldemEnv(num_players=3)
+    env = TexasHoldemEnv(num_players=3, min_raise_multiplier=2.0)
     
     # Reset environment
     obs = env.reset()

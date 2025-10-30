@@ -5,7 +5,7 @@ Game state management for Texas Hold'em
 from enum import Enum
 from typing import List, Optional
 import random
-from treys import Card
+from treys import Card, Deck
 
 from src.poker_env.player import Player
 from src.poker_env.pot_manager import PotManager
@@ -33,7 +33,8 @@ class GameState:
         small_blind: int,
         big_blind: int,
         rake_percent: float = 0.0,
-        rake_cap: int = 0
+        rake_cap: int = 0,
+        min_raise_multiplier: float = 1.0
     ):
         """
         Initialize game state
@@ -45,6 +46,7 @@ class GameState:
             big_blind: Big blind amount
             rake_percent: Rake percentage (0.0 to 1.0)
             rake_cap: Maximum rake per hand
+            min_raise_multiplier: Multiplier for minimum raise (e.g., 2.0 for 2x rule)
         """
         if not 2 <= num_players <= 10:
             raise ValueError("Number of players must be between 2 and 10")
@@ -59,9 +61,16 @@ class GameState:
         self.starting_stack = starting_stack
         self.small_blind = small_blind
         self.big_blind = big_blind
+        self.min_raise_multiplier = min_raise_multiplier
         
         # Managers
-        self.pot_manager = PotManager(small_blind, big_blind, rake_percent, rake_cap)
+        self.pot_manager = PotManager(
+            small_blind,
+            big_blind,
+            rake_percent,
+            rake_cap,
+            min_raise_multiplier
+        )
         self.hand_evaluator = HandEvaluator()
         
         # Game state
@@ -90,7 +99,7 @@ class GameState:
             raise ValueError("Not enough players with chips to start a hand")
         
         # Reset deck and community cards
-        self.deck = Card.get_full_deck()
+        self.deck = Deck().cards
         random.shuffle(self.deck)
         self.community_cards = []
         

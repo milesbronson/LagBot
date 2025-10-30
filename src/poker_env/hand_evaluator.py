@@ -2,7 +2,7 @@
 Hand evaluation using the treys library
 """
 
-from treys import Card, Evaluator
+from treys import Card, Evaluator, Deck
 from typing import List, Tuple
 
 
@@ -86,8 +86,8 @@ class HandEvaluator:
     
     @staticmethod
     def create_deck() -> List[int]:
-        """Create a full deck of 52 cards"""
-        return Card.get_full_deck()
+        deck = Deck()
+        return deck.cards
     
     @staticmethod
     def print_hand(hole_cards: List[int], community_cards: List[int]):

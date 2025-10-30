@@ -1,15 +1,14 @@
 # Default configuration for Texas Hold'em RL Bot
 
 # Environment settings
+# aggressive_config.yaml
 environment:
   num_players: 6
   starting_stack: 1000
   small_blind: 5
   big_blind: 10
-  rake_enabled: false
-  rake_percent: 0.05  # 5% rake when enabled
-  rake_cap: 5  # Maximum rake per hand
-  
+  min_raise_multiplier: 2.0  # 2x big blind rule
+
 # Training settings
 training:
   total_timesteps: 1000000
