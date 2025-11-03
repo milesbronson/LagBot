@@ -12,13 +12,13 @@ environment:
   rake_percent: 0.0
   rake_cap: 0
 
-# Training settings
+
 training:
   total_timesteps: 1000000
-  learning_rate: 0.0003
+  learning_rate: 0.0001
   n_steps: 2048
-  batch_size: 64
-  n_epochs: 10
+  batch_size: 128
+  n_epochs: 5
   gamma: 0.99
   gae_lambda: 0.95
   clip_range: 0.2

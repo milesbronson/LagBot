@@ -118,7 +118,7 @@ class TexasHoldemEnv(gym.Env):
         
         if done:
             winnings = self.game_state.determine_winners()
-            reward = float(current_player.stack - starting_stack)
+            reward = (current_player.stack - starting_stack) / starting_stack
             info['winnings'] = winnings
             info['hand_complete'] = True
         

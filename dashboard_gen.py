@@ -31,4 +31,4 @@ elif args.all:
         dashboard.plot_comparison("dashboard_comparison.png")
     dashboard.generate_html_report()
 else:
-    print("Use: --run NAME, --compare, --report, or --all")
+    print("Use: --run NAME, --compare, --report, or --all")         
