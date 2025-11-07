@@ -1,5 +1,5 @@
 """
-Tests for Texas Hold'em environment
+Tests for Texas Hold'em environment - FIXED for Gymnasium format
 """
 
 import pytest
@@ -52,11 +52,12 @@ class TestTexasHoldemEnv:
         """Test taking a step"""
         env.reset()
         
-        obs, reward, done, info = env.step(1)  # Call action
+        obs, reward, terminated, truncated, info = env.step(1)  # Call action
         
         assert isinstance(obs, np.ndarray)
         assert isinstance(reward, float)
-        assert isinstance(done, bool)
+        assert isinstance(terminated, bool)
+        assert isinstance(truncated, bool)
         assert isinstance(info, dict)
     
     def test_full_hand(self, env):
@@ -69,7 +70,8 @@ class TestTexasHoldemEnv:
         
         while not done and steps < max_steps:
             action = env.action_space.sample()
-            obs, reward, done, info = env.step(action)
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
             steps += 1
         
         # Hand should complete within reasonable number of steps
@@ -85,7 +87,8 @@ class TestTexasHoldemEnv:
             done = False
             while not done:
                 action = env.action_space.sample()
-                obs, reward, done, info = env.step(action)
+                obs, reward, terminated, truncated, info = env.step(action)
+                done = terminated or truncated
     
     def test_fold_action(self, env):
         """Test fold action"""
@@ -94,7 +97,7 @@ class TestTexasHoldemEnv:
         initial_active = len(env.game_state.get_active_players())
         
         # Fold
-        obs, reward, done, info = env.step(0)
+        obs, reward, terminated, truncated, info = env.step(0)
         
         # Should have one less active player
         assert len(env.game_state.get_active_players()) <= initial_active
@@ -109,7 +112,8 @@ class TestTexasHoldemEnv:
         
         while not done:
             action = 0 if fold_count < 2 else 1  # Fold first 2, last player calls
-            obs, reward, done, info = env.step(action)
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
             fold_count += 1
             
             if done:
@@ -130,7 +134,8 @@ class TestTexasHoldemEnv:
         
         while not done and actions_taken < 10:
             action = 1  # Call
-            obs, reward, done, info = env.step(action)
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
             actions_taken += 1
         
         # Should progress through betting rounds

@@ -1,17 +1,14 @@
-from src.poker_env.game_state import GameState
+from src.poker_env import TexasHoldemEnv
 
-# Create game
-game = GameState(num_players=3, starting_stack=1000, 
-                 small_blind=5, big_blind=10)
+env = TexasHoldemEnv(num_players=3)
+obs = env.reset()
 
-# Start hand
-game.start_new_hand()
-print(f"Players: {len(game.players)}")
-print(f"Pot: ${game.pot_manager.get_pot_total()}")
+done = False
+steps = 0
+while not done and steps < 100:
+    action = env.action_space.sample()
+    obs, reward, done, truncated, info = env.step(action)
+    steps += 1
 
-# Simulate actions
-game.execute_action(1)  # Call
-game.execute_action(1)  # Call
-game.execute_action(1)  # Call
-
-print(f"Betting round complete: {game.is_betting_round_complete()}")
+print(f"Hand completed in {steps} steps")
+print(f"Final reward: {reward}")
