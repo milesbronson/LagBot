@@ -1,5 +1,5 @@
 """
-Training dashboard - real-time visualization of training progress
+Training dashboard - real-time visualization with action distribution
 """
 
 import json
@@ -13,11 +13,25 @@ from src.training.metrics import DashboardData
 
 
 class TrainingDashboard:
-    """Interactive dashboard for monitoring training"""
+    """Interactive dashboard for monitoring training with action tracking"""
     
     def __init__(self, metrics_dir: str = "metrics"):
         self.dashboard = DashboardData(metrics_dir)
         self.metrics_dir = metrics_dir
+        
+        # Action names for poker
+        self.action_names = {
+            0: "Fold",
+            1: "Check/Call",
+            2: "Raise 50%",
+            3: "Raise 100%",
+            4: "Raise 200%",
+            5: "All-in"
+        }
+    
+    def set_action_names(self, names: dict):
+        """Set custom action names"""
+        self.action_names = names
     
     def plot_single_run(self, run_name: str, save_path: str = None):
         """Plot metrics for a single training run"""
@@ -91,6 +105,151 @@ class TrainingDashboard:
         ax.text(0.1, 0.9, summary_text, transform=ax.transAxes, 
                fontsize=11, verticalalignment='top', family='monospace',
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Saved to {save_path}")
+        
+        return fig
+    
+    def plot_action_distribution(self, action_history: dict, save_path: str = None):
+        """Plot action distribution over training time"""
+        if not action_history or 'timesteps' not in action_history:
+            print("No action history to plot")
+            return
+        
+        timesteps = action_history['timesteps']
+        distributions = action_history['distributions']
+        
+        if not timesteps:
+            return
+        
+        # Extract data by action
+        action_data = {i: [] for i in range(len(self.action_names))}
+        for dist in distributions:
+            for action_id in range(len(self.action_names)):
+                action_data[action_id].append(dist.get(action_id, 0))
+        
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+        fig.suptitle('Action Distribution Over Training', fontsize=14, fontweight='bold')
+        
+        # Stacked area chart
+        ax1.stackplot(
+            timesteps,
+            *[action_data[i] for i in range(len(self.action_names))],
+            labels=[self.action_names.get(i, f"Action {i}") for i in range(len(self.action_names))],
+            alpha=0.8
+        )
+        ax1.set_xlabel('Timesteps')
+        ax1.set_ylabel('Percentage (%)')
+        ax1.set_title('Action Distribution (Stacked Area)')
+        ax1.legend(loc='upper left', bbox_to_anchor=(1, 1))
+        ax1.grid(True, alpha=0.3)
+        ax1.set_ylim(0, 100)
+        
+        # Line plot (overlaid)
+        colors = plt.cm.tab10(np.linspace(0, 1, len(self.action_names)))
+        for action_id in range(len(self.action_names)):
+            ax2.plot(
+                timesteps,
+                action_data[action_id],
+                label=self.action_names.get(action_id, f"Action {action_id}"),
+                marker='o',
+                markersize=4,
+                color=colors[action_id],
+                linewidth=2
+            )
+        
+        ax2.set_xlabel('Timesteps')
+        ax2.set_ylabel('Percentage (%)')
+        ax2.set_title('Action Distribution (Line Plot)')
+        ax2.legend(loc='upper left', bbox_to_anchor=(1, 1))
+        ax2.grid(True, alpha=0.3)
+        ax2.set_ylim(0, 100)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Saved to {save_path}")
+        
+        return fig
+    
+    def plot_combined_dashboard(self, metrics: dict, action_history: dict = None, 
+                               save_path: str = None):
+        """Plot combined dashboard with metrics and action distribution"""
+        fig = plt.figure(figsize=(16, 12))
+        gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
+        
+        # 1. Reward curve
+        ax1 = fig.add_subplot(gs[0, :])
+        if metrics.get('timesteps'):
+            ax1.plot(metrics['timesteps'], metrics.get('avg_reward_100', []), 
+                    label='Avg Reward (100 ep)', linewidth=2, color='blue')
+            ax1.set_xlabel('Timesteps')
+            ax1.set_ylabel('Reward')
+            ax1.set_title('Learning Curve')
+            ax1.grid(True, alpha=0.3)
+            ax1.legend()
+        
+        # 2. Action distribution (stacked)
+        ax2 = fig.add_subplot(gs[1, :])
+        if action_history and action_history.get('timesteps'):
+            timesteps = action_history['timesteps']
+            distributions = action_history['distributions']
+            action_data = {i: [] for i in range(len(self.action_names))}
+            for dist in distributions:
+                for action_id in range(len(self.action_names)):
+                    action_data[action_id].append(dist.get(action_id, 0))
+            
+            ax2.stackplot(
+                timesteps,
+                *[action_data[i] for i in range(len(self.action_names))],
+                labels=[self.action_names.get(i, f"Action {i}") for i in range(len(self.action_names))],
+                alpha=0.8
+            )
+            ax2.set_xlabel('Timesteps')
+            ax2.set_ylabel('Percentage (%)')
+            ax2.set_title('Action Distribution Over Time')
+            ax2.legend(loc='upper left', bbox_to_anchor=(1, 1))
+            ax2.grid(True, alpha=0.3)
+            ax2.set_ylim(0, 100)
+        
+        # 3. Final action distribution (pie)
+        ax3 = fig.add_subplot(gs[2, 0])
+        if action_history and action_history.get('distributions'):
+            final_dist = action_history['distributions'][-1]
+            actions = list(range(len(self.action_names)))
+            percentages = [final_dist.get(i, 0) for i in actions]
+            labels = [self.action_names.get(i, f"Action {i}") for i in actions]
+            
+            ax3.pie(percentages, labels=labels, autopct='%1.1f%%', startangle=90)
+            ax3.set_title('Current Action Distribution')
+        
+        # 4. Action diversity (entropy)
+        ax4 = fig.add_subplot(gs[2, 1])
+        if action_history and action_history.get('distributions'):
+            entropy_values = []
+            for dist in action_history['distributions']:
+                probs = np.array([dist.get(i, 0) / 100 for i in range(len(self.action_names))])
+                probs = probs[probs > 0]
+                entropy = -np.sum(probs * np.log(probs + 1e-10))
+                entropy_values.append(entropy)
+            
+            ax4.plot(action_history['timesteps'], entropy_values, 
+                    marker='o', markersize=4, linewidth=2, color='purple')
+            ax4.set_xlabel('Timesteps')
+            ax4.set_ylabel('Entropy (Diversity)')
+            ax4.set_title('Action Distribution Diversity')
+            ax4.grid(True, alpha=0.3)
+            max_entropy = np.log(len(self.action_names))
+            ax4.axhline(y=max_entropy, color='r', linestyle='--', alpha=0.5, label='Max Diversity')
+            ax4.legend()
+        
+        fig.suptitle('Enhanced Training Dashboard with Action Distribution', 
+                    fontsize=14, fontweight='bold')
         
         plt.tight_layout()
         

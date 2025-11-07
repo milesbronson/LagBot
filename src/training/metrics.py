@@ -1,5 +1,5 @@
 """
-Training metrics collection and dashboard data generation
+Training metrics collection with action distribution tracking
 """
 
 import json
@@ -10,7 +10,7 @@ import numpy as np
 
 
 class TrainingMetrics:
-    """Collects high-level training statistics"""
+    """Collects training statistics including action distribution"""
     
     def __init__(self, run_name: str, save_dir: str = "metrics"):
         self.run_name = run_name
@@ -35,8 +35,23 @@ class TrainingMetrics:
             'entropy': [],
             'episodes': []
         }
+        
+        # Action distribution tracking
+        self.action_history = {
+            'timesteps': [],
+            'distributions': []  # List of {action_id: percentage}
+        }
+        self.action_counts = {}
+        self.total_actions = 0
     
-    def log_step(self, 
+    def record_actions(self, actions: List[int], num_actions: int = 6):
+        """Record batch of actions taken"""
+        for action in actions:
+            if 0 <= action < num_actions:
+                self.action_counts[action] = self.action_counts.get(action, 0) + 1
+                self.total_actions += 1
+    
+    def record_step(self, 
                  timestep: int,
                  episode_rewards: List[float],
                  agent_stats: Dict[str, Any] = None,
@@ -48,7 +63,6 @@ class TrainingMetrics:
         
         if episode_rewards:
             self.metrics['rewards'].append(float(np.mean(episode_rewards)))
-            # Last 100 episodes average
             last_100 = episode_rewards[-100:] if len(episode_rewards) >= 100 else episode_rewards
             self.metrics['avg_reward_100'].append(float(np.mean(last_100)))
         
@@ -66,11 +80,29 @@ class TrainingMetrics:
         
         self._save()
     
+    def checkpoint_actions(self, timestep: int, num_actions: int = 6):
+        """Save action distribution at checkpoint"""
+        if self.total_actions == 0:
+            dist = {i: 0.0 for i in range(num_actions)}
+        else:
+            dist = {
+                i: (self.action_counts.get(i, 0) / self.total_actions * 100)
+                for i in range(num_actions)
+            }
+        
+        self.action_history['timesteps'].append(timestep)
+        self.action_history['distributions'].append(dist)
+        self._save()
+    
     def _save(self):
-        """Save metrics to JSON"""
+        """Save metrics and action history to JSON"""
         metrics_file = os.path.join(self.run_dir, 'metrics.json')
         with open(metrics_file, 'w') as f:
             json.dump(self.metrics, f, indent=2)
+        
+        actions_file = os.path.join(self.run_dir, 'action_history.json')
+        with open(actions_file, 'w') as f:
+            json.dump(self.action_history, f, indent=2)
     
     def get_summary(self) -> Dict[str, Any]:
         """Get high-level summary"""
@@ -90,7 +122,7 @@ class TrainingMetrics:
 
 
 class DashboardData:
-    """Generate dashboard-ready data across multiple runs"""
+    """Load and process dashboard data across runs"""
     
     def __init__(self, metrics_dir: str = "metrics"):
         self.metrics_dir = metrics_dir
@@ -111,6 +143,16 @@ class DashboardData:
                     runs[run_name] = json.load(f)
         
         return runs
+    
+    def load_action_history(self, run_name: str) -> Dict:
+        """Load action history for specific run"""
+        run_path = os.path.join(self.metrics_dir, run_name)
+        actions_file = os.path.join(run_path, 'action_history.json')
+        
+        if os.path.isfile(actions_file):
+            with open(actions_file, 'r') as f:
+                return json.load(f)
+        return {'timesteps': [], 'distributions': []}
     
     def get_run_comparison(self) -> Dict[str, Any]:
         """Compare all active runs"""
@@ -168,31 +210,3 @@ class DashboardData:
                 f.write(f"{run_name},{ts},{eps},{curr_reward:.2f},{avg_100:.2f},{best_100:.2f},{wr:.2f}\n")
         
         print(f"Exported to {output_file}")
-
-
-if __name__ == "__main__":
-    # Test
-    metrics = TrainingMetrics("test_run")
-    
-    for step in range(0, 100000, 10000):
-        rewards = np.random.normal(0, 10, 100).tolist()
-        agent_stats = {
-            'win_rate': 0.33 + step/1000000,
-            'fold_rate': 0.3,
-            'raise_rate': 0.3,
-            'all_in_rate': 0.07
-        }
-        learning_metrics = {
-            'learning_rate': 0.0003,
-            'policy_loss': 0.5 - step/200000,
-            'value_loss': 0.3 - step/300000,
-            'entropy': 1.0 - step/100000
-        }
-        metrics.log_step(step, rewards, agent_stats, learning_metrics)
-    
-    print(metrics.get_summary())
-    
-    dashboard = DashboardData()
-    comparison = dashboard.get_run_comparison()
-    print(json.dumps(comparison, indent=2))
-    dashboard.export_csv()
