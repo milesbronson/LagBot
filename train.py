@@ -1,5 +1,5 @@
 """
-Training script with metrics dashboard support
+Training script with metrics dashboard support and automatic dashboard generation
 """
 
 import argparse
@@ -22,7 +22,7 @@ def load_config(config_path: str) -> dict:
 
 
 def train(config_path: str, run_name: str = None):
-    """Train a PPO agent with metrics collection"""
+    """Train a PPO agent with metrics collection and dashboard generation"""
     
     config = load_config(config_path)
     
@@ -132,6 +132,35 @@ def train(config_path: str, run_name: str = None):
     print(f"  Avg Reward (100): {summary.get('avg_reward_100', 0):.2f}")
     print(f"  Win Rate: {summary.get('win_rate', 0):.1%}")
     print("="*60)
+    
+    # Generate dashboards
+    print("\nGenerating dashboards...")
+    try:
+        from src.training.dashboard import TrainingDashboard
+        
+        dashboard = TrainingDashboard()
+        
+        # Load action history
+        action_history = dashboard.dashboard.load_action_history(run_name)
+        
+        # Generate combined dashboard with action distribution
+        dashboard_path = os.path.join(model_dir, f"dashboard_combined_{run_name}.png")
+        dashboard.plot_combined_dashboard(
+            metrics=metrics.metrics,
+            action_history=action_history,
+            save_path=dashboard_path
+        )
+        print(f"✓ Combined dashboard saved: {dashboard_path}")
+        
+        # Also generate standard dashboard
+        standard_dashboard_path = os.path.join(model_dir, f"dashboard_{run_name}.png")
+        dashboard.plot_single_run(run_name, save_path=standard_dashboard_path)
+        print(f"✓ Standard dashboard saved: {standard_dashboard_path}")
+        
+    except Exception as e:
+        print(f"⚠ Warning: Could not generate dashboards: {e}")
+    
+    print()
 
 
 def main():

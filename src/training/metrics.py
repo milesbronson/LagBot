@@ -43,7 +43,12 @@ class TrainingMetrics:
         }
         self.action_counts = {}
         self.total_actions = 0
-    
+
+    def log_step(self, timestep, episode_rewards, agent_stats=None, learning_metrics=None):
+        """Log metrics from training step"""
+        self.record_step(timestep, episode_rewards, agent_stats, learning_metrics)
+
+
     def record_actions(self, actions: List[int], num_actions: int = 6):
         """Record batch of actions taken"""
         for action in actions:
