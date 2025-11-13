@@ -34,7 +34,8 @@ class TexasHoldemEnv(gym.Env):
         rake_cap: int = 0,
         min_raise_multiplier: float = 1.0,
         raise_bins: Optional[List[float]] = None,
-        include_all_in: bool = True
+        include_all_in: bool = True,
+        reset_stacks_every_n_timesteps: Optional[int] = None  # ← ADD THIS
     ):
         """
         Args:
@@ -52,6 +53,9 @@ class TexasHoldemEnv(gym.Env):
         self.big_blind = big_blind
         self.raise_bins = raise_bins if raise_bins else [0.5, 1.0, 2.0]
         self.include_all_in = include_all_in
+        self.reset_stacks_every_n_timesteps = reset_stacks_every_n_timesteps
+        self.timesteps_since_reset = 0
+        self.total_timesteps = 0
         
         self.game_state = GameState(
             num_players=num_players,
@@ -116,6 +120,21 @@ class TexasHoldemEnv(gym.Env):
         reward = 0.0
         info = {'action': action_type, 'raise_bins': self.raise_bins}
         
+        # Track timesteps and reset stacks when limit hit
+        self.timesteps_since_reset += 1
+        self.total_timesteps += 1
+        
+        if self.reset_stacks_every_n_timesteps is not None:
+            if self.timesteps_since_reset >= self.reset_stacks_every_n_timesteps:
+                # Reset ALL stacks here
+                for player in self.game_state.players:
+                    if player.stack <= 0:
+                        player.stack = self.starting_stack
+                    else:
+                        player.stack = self.starting_stack  # Reset everyone
+                
+                self.timesteps_since_reset = 0
+                print(f"[RESET] Timestep {self.total_timesteps}")
         if done:
             winnings = self.game_state.determine_winners()
             reward = (current_player.stack - starting_stack) / starting_stack

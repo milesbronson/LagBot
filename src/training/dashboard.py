@@ -84,25 +84,35 @@ class TrainingDashboard:
         # Stats Summary
         ax = axes[1, 1]
         ax.axis('off')
-        
+
+        # Safely extract values with defaults
+        total_timesteps = metrics['timesteps'][-1] if metrics.get('timesteps') else 0
+        total_episodes = metrics['episodes'][-1] if metrics.get('episodes') else 0
+        current_reward = metrics['rewards'][-1] if metrics.get('rewards') else 0.0
+        avg_reward_100 = metrics['avg_reward_100'][-1] if metrics.get('avg_reward_100') else 0.0
+        best_reward_100 = max(metrics['avg_reward_100']) if metrics.get('avg_reward_100') else 0.0
+        win_rate = metrics['win_rate'][-1] if metrics.get('win_rate') else 0.0
+        fold_rate = metrics['fold_rate'][-1] if metrics.get('fold_rate') else 0.0
+        raise_rate = metrics['raise_rate'][-1] if metrics.get('raise_rate') else 0.0
+
         summary_text = f"""
         TRAINING SUMMARY
-        
-        Total Timesteps: {metrics['timesteps'][-1]:,}
-        Total Episodes: {metrics['episodes'][-1]:,}
-        
-        Current Reward: {metrics['rewards'][-1]:.2f}
-        Avg Reward (100): {metrics['avg_reward_100'][-1]:.2f}
-        Best Reward (100): {max(metrics['avg_reward_100']):.2f}
-        
-        Win Rate: {metrics['win_rate'][-1]:.1%}
-        Fold Rate: {metrics['fold_rate'][-1]:.1%}
-        Raise Rate: {metrics['raise_rate'][-1]:.1%}
-        
-        Start Time: {metrics['start_time']}
+
+        Total Timesteps: {total_timesteps:,}
+        Total Episodes: {total_episodes:,}
+
+        Current Reward: {current_reward:.2f}
+        Avg Reward (100): {avg_reward_100:.2f}
+        Best Reward (100): {best_reward_100:.2f}
+
+        Win Rate: {win_rate:.1%}
+        Fold Rate: {fold_rate:.1%}
+        Raise Rate: {raise_rate:.1%}
+
+        Start Time: {metrics.get('start_time', 'N/A')}
         """
-        
-        ax.text(0.1, 0.9, summary_text, transform=ax.transAxes, 
+
+        ax.text(0.1, 0.9, summary_text, transform=ax.transAxes,
                fontsize=11, verticalalignment='top', family='monospace',
                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
@@ -224,29 +234,48 @@ class TrainingDashboard:
             actions = list(range(len(self.action_names)))
             percentages = [final_dist.get(i, 0) for i in actions]
             labels = [self.action_names.get(i, f"Action {i}") for i in actions]
-            
-            ax3.pie(percentages, labels=labels, autopct='%1.1f%%', startangle=90)
-            ax3.set_title('Current Action Distribution')
+
+            # Filter out zero/NaN values for cleaner pie chart
+            filtered_data = [(p, l) for p, l in zip(percentages, labels) if p > 0 and not np.isnan(p)]
+            if filtered_data:
+                filtered_percentages, filtered_labels = zip(*filtered_data)
+                ax3.pie(filtered_percentages, labels=filtered_labels, autopct='%1.1f%%', startangle=90)
+                ax3.set_title('Current Action Distribution')
+            else:
+                ax3.text(0.5, 0.5, 'No data yet', ha='center', va='center', transform=ax3.transAxes)
+                ax3.set_title('Current Action Distribution')
         
         # 4. Action diversity (entropy)
         ax4 = fig.add_subplot(gs[2, 1])
         if action_history and action_history.get('distributions'):
             entropy_values = []
             for dist in action_history['distributions']:
-                probs = np.array([dist.get(i, 0) / 100 for i in range(len(self.action_names))])
+                # Convert percentages to probabilities
+                probs = np.array([dist.get(i, 0) / 100.0 for i in range(len(self.action_names))])
+                # Filter out zero probabilities and normalize (handle rounding errors)
                 probs = probs[probs > 0]
-                entropy = -np.sum(probs * np.log(probs + 1e-10))
-                entropy_values.append(entropy)
-            
-            ax4.plot(action_history['timesteps'], entropy_values, 
-                    marker='o', markersize=4, linewidth=2, color='purple')
-            ax4.set_xlabel('Timesteps')
-            ax4.set_ylabel('Entropy (Diversity)')
-            ax4.set_title('Action Distribution Diversity')
-            ax4.grid(True, alpha=0.3)
-            max_entropy = np.log(len(self.action_names))
-            ax4.axhline(y=max_entropy, color='r', linestyle='--', alpha=0.5, label='Max Diversity')
-            ax4.legend()
+                if len(probs) > 0:
+                    # Normalize to sum to 1 (in case of rounding errors)
+                    probs = probs / np.sum(probs)
+                    # Calculate entropy safely
+                    entropy = -np.sum(probs * np.log(probs + 1e-10))
+                    entropy_values.append(entropy)
+                else:
+                    entropy_values.append(0.0)
+
+            if entropy_values and not all(np.isnan(entropy_values)):
+                ax4.plot(action_history['timesteps'], entropy_values,
+                        marker='o', markersize=4, linewidth=2, color='purple')
+                ax4.set_xlabel('Timesteps')
+                ax4.set_ylabel('Entropy (Diversity)')
+                ax4.set_title('Action Distribution Diversity')
+                ax4.grid(True, alpha=0.3)
+                max_entropy = np.log(len(self.action_names))
+                ax4.axhline(y=max_entropy, color='r', linestyle='--', alpha=0.5, label='Max Diversity')
+                ax4.legend()
+            else:
+                ax4.text(0.5, 0.5, 'No data yet', ha='center', va='center', transform=ax4.transAxes)
+                ax4.set_title('Action Distribution Diversity')
         
         fig.suptitle('Enhanced Training Dashboard with Action Distribution', 
                     fontsize=14, fontweight='bold')
@@ -292,10 +321,12 @@ class TrainingDashboard:
         # Win rates
         ax = axes[1]
         win_rates = [comparison['runs'][r]['win_rate'] for r in run_names]
-        ax.bar(run_names, win_rates, alpha=0.8, color='green')
+        x = np.arange(len(run_names))
+        ax.bar(x, win_rates, alpha=0.8, color='green')
         ax.set_xlabel('Run')
         ax.set_ylabel('Win Rate')
         ax.set_title('Win Rate Comparison')
+        ax.set_xticks(x)
         ax.set_xticklabels(run_names, rotation=45, ha='right')
         ax.grid(True, alpha=0.3, axis='y')
         

@@ -37,6 +37,9 @@ python dashboard_gen.py --report
 
 # Generate everything
 python dashboard_gen.py --all
+
+#generate dashboard
+tensorboard --logdir ./logs/
 ```
 
 ## Files Generated

@@ -11,18 +11,19 @@ environment:
   rake_enabled: false
   rake_percent: 0.0
   rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000  # ← One line!
 
 
 training:
   total_timesteps: 1000000
-  learning_rate: 0.0001
+  learning_rate: 0.001
   n_steps: 2048
   batch_size: 128
   n_epochs: 5
   gamma: 0.99
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.0
+  ent_coef: 0.01
   vf_coef: 0.5
   max_grad_norm: 0.5
   
