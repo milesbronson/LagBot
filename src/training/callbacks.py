@@ -15,15 +15,22 @@ class MetricsCallback(BaseCallback):
         self.metrics = metrics
         self.log_freq = log_freq
         self.episode_rewards = []
+        self.current_episode_reward = 0  # Track current episode reward
         self.episode_actions = []  # Track actions taken
         self.episode_wins = 0
         self.episode_count = 0
         self.last_logged_step = 0
 
+    def set_model(self, model) -> None:
+        """Set the model attribute - required by BaseCallback"""
+        super().set_model(model)
+
     def _on_step(self) -> bool:
         """Called at each step"""
         # Get info from the last step
         infos = self.locals.get('infos', [])
+        dones = self.locals.get('dones', [])
+        rewards = self.locals.get('rewards', [])
 
         # Track actions taken
         if 'actions' in self.locals:
@@ -33,17 +40,39 @@ class MetricsCallback(BaseCallback):
             else:
                 self.episode_actions.append(int(actions))
 
+        # Track rewards
+        if isinstance(rewards, np.ndarray):
+            self.current_episode_reward += float(rewards[0]) if len(rewards) > 0 else 0
+        else:
+            self.current_episode_reward += float(rewards) if rewards is not None else 0
+
         # Track episode completion
-        for info in infos:
-            if 'episode' in info:
+        for i, info in enumerate(infos):
+            if isinstance(dones, np.ndarray):
+                done = dones[i] if i < len(dones) else False
+            else:
+                done = dones if i == 0 else False
+
+            if done:
                 # Episode finished, record reward
-                episode_reward = info['episode']['r']
-                self.episode_rewards.append(episode_reward)
+                self.episode_rewards.append(self.current_episode_reward)
                 self.episode_count += 1
 
                 # Check if agent won (positive reward typically indicates win)
-                if episode_reward > 0:
+                if self.current_episode_reward > 0:
                     self.episode_wins += 1
+
+                # Reset for next episode
+                self.current_episode_reward = 0
+
+            # Handle info dict if present
+            if 'episode' in info:
+                episode_reward = info['episode'].get('r', 0)
+                if episode_reward != 0:
+                    self.episode_rewards.append(episode_reward)
+                    self.episode_count += 1
+                    if episode_reward > 0:
+                        self.episode_wins += 1
 
         # Log periodically
         if self.num_timesteps - self.last_logged_step >= self.log_freq:
@@ -51,52 +80,74 @@ class MetricsCallback(BaseCallback):
             self.last_logged_step = self.num_timesteps
 
         return True
-    
+
     def _on_training_start(self) -> None:
         """Called at training start"""
-        pass
-    
+        self.episode_rewards = []
+        self.current_episode_reward = 0
+        self.episode_actions = []
+        self.episode_wins = 0
+        self.episode_count = 0
+        self.last_logged_step = 0
+
     def _on_training_end(self) -> None:
         """Called at training end"""
+        # Log final metrics
         self._log_metrics()
-    
-    def _log_metrics(self):
-        """Log current metrics"""
-        # Calculate actual win rate from tracked episodes
-        win_rate = self.episode_wins / self.episode_count if self.episode_count > 0 else 0.0
 
-        # Calculate action distribution from tracked actions
-        # Actions: 0=Fold, 1=Check/Call, 2-4=Raise, 5=All-in (typical poker env)
-        total_actions = len(self.episode_actions)
-        if total_actions > 0:
-            action_counts = np.bincount(self.episode_actions, minlength=6)
-            fold_rate = action_counts[0] / total_actions
-            call_rate = action_counts[1] / total_actions
-            # Raise rate: sum of raise actions (typically actions 2, 3, 4)
-            raise_rate = (action_counts[2] + action_counts[3] + action_counts[4]) / total_actions if len(action_counts) > 4 else 0.0
-            all_in_rate = action_counts[5] / total_actions if len(action_counts) > 5 else 0.0
-        else:
-            fold_rate = call_rate = raise_rate = all_in_rate = 0.0
+    def _log_metrics(self) -> None:
+        """Log collected metrics to both custom metrics and TensorBoard"""
+        if not self.episode_rewards:
+            if self.verbose > 0:
+                print(f"[{self.num_timesteps}] No episodes completed yet")
+            return
 
-        agent_stats = {
-            'win_rate': float(win_rate),
-            'fold_rate': float(fold_rate),
-            'raise_rate': float(raise_rate),
-            'all_in_rate': float(all_in_rate)
-        }
+        # Calculate statistics
+        avg_reward = np.mean(self.episode_rewards)
+        max_reward = np.max(self.episode_rewards)
+        min_reward = np.min(self.episode_rewards)
+        
+        win_rate = self.episode_wins / max(self.episode_count, 1)
 
-        # Extract REAL training losses from the PPO model's logger
+        # Action distribution statistics
+        fold_rate = 0
+        raise_rate = 0
+        all_in_rate = 0
+        call_rate = 0
+
+        if self.episode_actions:
+            total_actions = len(self.episode_actions)
+            fold_count = self.episode_actions.count(0)  # Fold is action 0
+            call_count = self.episode_actions.count(1)  # Call is action 1
+            raise_count = sum(1 for a in self.episode_actions if a in [2, 3, 4])  # Raise actions
+            all_in_count = self.episode_actions.count(5)  # All-in is action 5
+
+            fold_rate = fold_count / total_actions
+            call_rate = call_count / total_actions
+            raise_rate = raise_count / total_actions
+            all_in_rate = all_in_count / total_actions
+
+        # Extract learning metrics from model if available
         policy_loss = 0.0
         value_loss = 0.0
         entropy_loss = 0.0
 
-        if hasattr(self.model, 'logger') and self.model.logger is not None:
-            # Access the logger's name_to_value dictionary
-            logger_dict = self.model.logger.name_to_value
-            policy_loss = logger_dict.get('train/policy_loss', 0.0)
-            value_loss = logger_dict.get('train/value_loss', 0.0)
-            entropy_loss = logger_dict.get('train/entropy_loss', 0.0)
+        if hasattr(self.model, 'logger') and self.model.logger:
+            if hasattr(self.model.logger, 'name_to_value'):
+                policy_loss = self.model.logger.name_to_value.get('train/policy_loss', 0.0)
+                value_loss = self.model.logger.name_to_value.get('train/value_loss', 0.0)
+                entropy_loss = self.model.logger.name_to_value.get('train/entropy_loss', 0.0)
 
+        # Prepare agent stats
+        agent_stats = {
+            'win_rate': float(win_rate),
+            'episodes': int(self.episode_count),
+            'avg_reward': float(avg_reward),
+            'max_reward': float(max_reward),
+            'min_reward': float(min_reward),
+        }
+
+        # Prepare learning metrics
         learning_metrics = {
             'learning_rate': float(self.model.learning_rate) if hasattr(self.model, 'learning_rate') else 0.0,
             'policy_loss': float(policy_loss),
@@ -104,13 +155,33 @@ class MetricsCallback(BaseCallback):
             'entropy': float(entropy_loss)
         }
 
-        # Log the metrics
+        # Log to custom metrics system
         self.metrics.log_step(
             self.num_timesteps,
             self.episode_rewards[-100:] if self.episode_rewards else [],
             agent_stats,
             learning_metrics
         )
+
+        # Log to TensorBoard
+        if hasattr(self.model, 'logger') and self.model.logger:
+            # Agent performance metrics
+            self.model.logger.record("agent/win_rate", win_rate)
+            self.model.logger.record("agent/avg_reward", avg_reward)
+            self.model.logger.record("agent/max_reward", max_reward)
+            self.model.logger.record("agent/min_reward", min_reward)
+            
+            # Action distribution metrics
+            self.model.logger.record("agent/fold_rate", fold_rate)
+            self.model.logger.record("agent/call_rate", call_rate)
+            self.model.logger.record("agent/raise_rate", raise_rate)
+            self.model.logger.record("agent/all_in_rate", all_in_rate)
+            
+            # Episode tracking
+            self.model.logger.record("agent/episodes_completed", self.episode_count)
+            
+            # Dump to TensorBoard file
+            self.model.logger.dump(self.num_timesteps)
 
         # Record actions for action distribution tracking
         if self.episode_actions:
@@ -124,7 +195,7 @@ class MetricsCallback(BaseCallback):
 
         if self.verbose > 0:
             print(f"[{self.num_timesteps}] Metrics - Win Rate: {win_rate:.2%}, Fold: {fold_rate:.2%}, "
-                  f"Raise: {raise_rate:.2%}, Policy Loss: {policy_loss:.4f}")
+                  f"Call: {call_rate:.2%}, Raise: {raise_rate:.2%}, Avg Reward: {avg_reward:.2f}")
 
 
 class SimpleMetricsCallback(BaseCallback):
@@ -136,15 +207,24 @@ class SimpleMetricsCallback(BaseCallback):
         self.log_freq = log_freq
         self.steps_since_log = 0
         self.episode_rewards = []
+        self.current_episode_reward = 0
         self.episode_actions = []
         self.episode_wins = 0
         self.episode_count = 0
+        self.last_logged_step = 0
+
+    def set_model(self, model) -> None:
+        """Set the model attribute - required by BaseCallback"""
+        super().set_model(model)
 
     def _on_step(self) -> bool:
+        """Called at each step"""
         self.steps_since_log += 1
 
         # Get info from the last step
         infos = self.locals.get('infos', [])
+        dones = self.locals.get('dones', [])
+        rewards = self.locals.get('rewards', [])
 
         # Track actions taken
         if 'actions' in self.locals:
@@ -154,51 +234,56 @@ class SimpleMetricsCallback(BaseCallback):
             else:
                 self.episode_actions.append(int(actions))
 
+        # Track rewards
+        if isinstance(rewards, np.ndarray):
+            self.current_episode_reward += float(rewards[0]) if len(rewards) > 0 else 0
+        else:
+            self.current_episode_reward += float(rewards) if rewards is not None else 0
+
         # Track episode completion
-        for info in infos:
-            if 'episode' in info:
-                episode_reward = info['episode']['r']
-                self.episode_rewards.append(episode_reward)
+        for i, info in enumerate(infos):
+            if isinstance(dones, np.ndarray):
+                done = dones[i] if i < len(dones) else False
+            else:
+                done = dones if i == 0 else False
+
+            if done:
+                self.episode_rewards.append(self.current_episode_reward)
                 self.episode_count += 1
-                if episode_reward > 0:
+
+                if self.current_episode_reward > 0:
                     self.episode_wins += 1
+
+                self.current_episode_reward = 0
 
         # Log periodically
         if self.steps_since_log >= self.log_freq:
-            # Calculate actual statistics
-            win_rate = self.episode_wins / self.episode_count if self.episode_count > 0 else 0.0
-
-            total_actions = len(self.episode_actions)
-            if total_actions > 0:
-                action_counts = np.bincount(self.episode_actions, minlength=6)
-                fold_rate = action_counts[0] / total_actions
-                raise_rate = (action_counts[2] + action_counts[3] + action_counts[4]) / total_actions if len(action_counts) > 4 else 0.0
-                all_in_rate = action_counts[5] / total_actions if len(action_counts) > 5 else 0.0
-            else:
-                fold_rate = raise_rate = all_in_rate = 0.0
-
-            agent_stats = {
-                'win_rate': float(win_rate),
-                'fold_rate': float(fold_rate),
-                'raise_rate': float(raise_rate),
-                'all_in_rate': float(all_in_rate)
-            }
-
-            self.metrics.log_step(
-                self.num_timesteps,
-                self.episode_rewards[-100:] if self.episode_rewards else [],
-                agent_stats
-            )
-
-            # Record actions for distribution tracking
-            if self.episode_actions:
-                self.metrics.record_actions(self.episode_actions)
-                self.metrics.checkpoint_actions(self.num_timesteps)
-
-            # Reset counters
-            self.episode_actions = []
-            self.episode_wins = 0
-            self.episode_count = 0
+            self._log_metrics()
             self.steps_since_log = 0
 
         return True
+
+    def _on_training_start(self) -> None:
+        """Called at training start"""
+        self.episode_rewards = []
+        self.current_episode_reward = 0
+        self.episode_actions = []
+        self.episode_wins = 0
+        self.episode_count = 0
+
+    def _log_metrics(self) -> None:
+        """Log collected metrics"""
+        if not self.episode_rewards:
+            return
+
+        avg_reward = np.mean(self.episode_rewards)
+        win_rate = self.episode_wins / max(self.episode_count, 1)
+
+        # Record actions
+        if self.episode_actions:
+            self.metrics.record_actions(self.episode_actions)
+
+        # Reset tracking
+        self.episode_actions = []
+        self.episode_wins = 0
+        self.episode_count = 0

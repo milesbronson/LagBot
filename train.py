@@ -11,7 +11,7 @@ import numpy as np
 from src.poker_env.texas_holdem_env import TexasHoldemEnv
 from src.agents.ppo_agent import PPOAgent, TrainingCallback
 from src.training.metrics import TrainingMetrics
-from src.training.callbacks import SimpleMetricsCallback
+from src.training.callbacks import SimpleMetricsCallback, MetricsCallback
 
 
 def load_config(config_path: str) -> dict:
@@ -91,7 +91,7 @@ def train(config_path: str, run_name: str = None):
         save_path=model_dir
     )
     
-    metrics_callback = SimpleMetricsCallback(
+    metrics_callback = MetricsCallback(
         metrics=metrics,
         log_freq=10000
     )

@@ -6,9 +6,11 @@ import argparse
 import os
 
 from src.poker_env.texas_holdem_env import TexasHoldemEnv
+from src.utils import ModelManager
 from src.agents.ppo_agent import PPOAgent
 from src.agents.human_agent import HumanAgent
 from src.agents.random_agent import RandomAgent, CallAgent
+from agent_performance_tracker import SessionTracker
 
 
 class FlexibleHumanAgent(HumanAgent):
@@ -27,6 +29,36 @@ class FlexibleHumanAgent(HumanAgent):
         print("\n" + "="*60)
         print("YOUR TURN!")
         print("="*60)
+        
+        # Show community cards
+        community = self.env.game_state.community_cards
+        if community:
+            cards_str = " ".join([self._card_to_string(card) for card in community])
+            print(f"\nCommunity Cards: {cards_str}")
+        else:
+            print("\nCommunity Cards: (pre-flop)")
+        
+        # Show your hole cards
+        your_cards = " ".join([self._card_to_string(card) for card in current_player.hand])
+        print(f"Your Hand: {your_cards}")
+        
+        print("\n" + "-"*60)
+        
+        # Show all players' current bets
+        print("Player Bets This Round:")
+        for i, player in enumerate(self.env.game_state.players):
+            status = ""
+            if player.stack <= 0 and player.current_bet == 0:
+                status = " (busted)"
+            elif not player.is_active:
+                status = " (folded)"
+            elif player.is_all_in:
+                status = " (all-in)"
+            
+            marker = " ← YOU" if i == self.env.game_state.current_player_idx else ""
+            print(f"  Player {i}: ${player.current_bet}{status}{marker}")
+        
+        print("\n" + "-"*60)
         print(f"Your stack: ${current_player.stack}")
         print(f"Your current bet: ${current_player.current_bet}")
         print(f"Pot total: ${pot_manager.get_pot_total()}")
@@ -89,6 +121,30 @@ class FlexibleHumanAgent(HumanAgent):
             except (KeyboardInterrupt, EOFError):
                 print("\nDefaulting to fold.")
                 return 0, None
+    
+    def _card_to_string(self, card):
+        """Convert a card integer to readable format (e.g., 'A♠', 'K♥')"""
+        if card == 0:
+            return "?"
+        
+        # Treys library encoding: 2s=8, 3s=16, 4s=32, ..., As=2048, 2h=4, 3h=8, etc.
+        # Rank: 0=deuce, 1=trey, ..., 11=king, 12=ace
+        # Suit: 1=spades, 2=hearts, 4=diamonds, 8=clubs
+        
+        rank_names = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A']
+        suit_names = {1: '♠', 2: '♥', 4: '♦', 8: '♣'}
+        
+        # Extract rank and suit from Treys encoding
+        rank = (card >> 8) - 1  # Rank is in bits 8-11
+        suit = 1 << (card & 0xF)  # Suit is in bits 0-3
+        
+        if rank < 0 or rank >= len(rank_names):
+            return "?"
+        
+        rank_str = rank_names[rank]
+        suit_str = suit_names.get(suit, '?')
+        
+        return f"{rank_str}{suit_str}"
 
 
 class BotWithDiscreteActions:
@@ -134,6 +190,17 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
     human_agent = FlexibleHumanAgent(env, name="You")
     agents = [human_agent]
     
+    manager = ModelManager()
+
+    if model_path is None:
+        # Try to load the most recent model
+        try:
+            model_path = manager.get_latest_model()
+            print(f"Auto-loaded most recent model: {model_path}\n")
+        except FileNotFoundError:
+            print("No trained model found. Using random opponents instead.\n")
+            model_path = None
+
     if model_path and os.path.exists(model_path):
         print(f"Loading trained model: {model_path}")
         for i in range(num_opponents):
@@ -156,6 +223,14 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
     
     hand_number = 0
     
+    # Initialize performance tracker
+    tracker = SessionTracker(f"game_vs_{opponent_type}_{num_opponents}bots")
+    
+    # Register all agents
+    tracker.register_agent(0, human_agent.name, env.starting_stack)
+    for i, bot in enumerate(agents[1:], 1):
+        tracker.register_agent(i, bot.name, env.starting_stack)
+    
     try:
         while True:
             hand_number += 1
@@ -172,6 +247,9 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
             print(f"HAND #{hand_number}")
             print(f"{'='*60}\n")
             
+            # Track hand start
+            tracker.record_hand_start()
+            
             env.render()
             done = False
             step_count = 0
@@ -184,20 +262,24 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
                     action, custom_amount = current_agent.select_action_with_custom_amount(obs)
                     
                     if action == 0:
-                        obs, reward, done, info = env.step(0)
+                        obs, reward, terminated, truncated, info = env.step(0)
+                        done = terminated or truncated
                         print(f"\nYou folded")
                     elif action == 1:
-                        obs, reward, done, info = env.step(1)
+                        obs, reward, terminated, truncated, info = env.step(1)
+                        done = terminated or truncated
                         print(f"\nYou called/checked")
                     else:
-                        obs, reward, done, info = env.step_with_raise(2, custom_amount)
+                        obs, reward, terminated, truncated, info = env.step_with_raise(2, custom_amount)
+                        done = terminated or truncated
                         print(f"\nYou raised/went all-in")
                 
                 else:
                     print(f"\n{current_agent.name}'s turn...")
                     valid_actions = env.get_valid_actions()
                     discrete_action = current_agent.agent.select_action(obs, valid_actions)
-                    obs, reward, done, info = env.step(discrete_action)
+                    obs, reward, terminated, truncated, info = env.step(discrete_action)
+                    done = terminated or truncated
                     
                     action_desc = env.get_action_description(discrete_action)
                     print(f"{current_agent.name} {action_desc}")
@@ -221,11 +303,27 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
                     if amount > 0:
                         player = env.game_state.players[player_id]
                         print(f"  {player.name} wins ${amount}!")
+                        tracker.record_hand_result(player_id, amount, hand_won=True)
+                    elif amount < 0:
+                        # Track losses for other players
+                        player = env.game_state.players[player_id]
+                        tracker.record_hand_result(player_id, amount, hand_won=False)
             
             print("\nChip Stacks:")
-            for player in env.game_state.players:
+            total_chips = sum(p.stack for p in env.game_state.players)
+            
+            # Track initial buy-ins (all players start with starting_stack)
+            initial_chips = env.starting_stack * num_players
+            
+            for i, player in enumerate(env.game_state.players):
+                # Profit = current stack - starting_stack for that player
                 profit = player.stack - env.starting_stack
-                print(f"  {player.name}: ${player.stack} ({profit:+d})")
+                print(f"  Player {i}: ${player.stack} ({profit:+d})")
+            
+            print(f"\nTotal chips in play: ${total_chips} (started with ${initial_chips})")
+            if total_chips < initial_chips:
+                rake_taken = initial_chips - total_chips
+                print(f"Rake taken: ${rake_taken}")
             
             if hand_number % 5 == 0:
                 print()
@@ -236,14 +334,29 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
     except KeyboardInterrupt:
         print("\n\nGame interrupted by user.")
     
+    # Print tracker summary
+    print("\n")
+    tracker.print_session_summary()
+    tracker.print_rankings()
+    
     print("\n" + "="*60)
     print("GAME SUMMARY")
     print("="*60)
     print(f"Hands played: {hand_number}")
     print("\nFinal chip stacks:")
-    for player in env.game_state.players:
+    
+    initial_total = env.starting_stack * num_players
+    final_total = sum(p.stack for p in env.game_state.players)
+    
+    for i, player in enumerate(env.game_state.players):
         profit = player.stack - env.starting_stack
-        print(f"  {player.name}: ${player.stack} ({profit:+d})")
+        print(f"  Player {i}: ${player.stack} ({profit:+d})")
+    
+    print(f"\nTotal chips: ${final_total} (started with ${initial_total})")
+    if final_total < initial_total:
+        total_rake = initial_total - final_total
+        print(f"Total rake taken: ${total_rake}")
+    
     print("="*60)
 
 
