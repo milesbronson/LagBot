@@ -3,7 +3,7 @@ Tests for MetricsCallback - fixed version
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock
 import numpy as np
 from src.training.callbacks import MetricsCallback, SimpleMetricsCallback
 from src.training.metrics import TrainingMetrics

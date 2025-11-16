@@ -4,12 +4,9 @@ Tests for play.py - verify FlexibleHumanAgent and game flow
 
 import pytest
 import numpy as np
-from unittest.mock import Mock, patch, MagicMock
-from io import StringIO
-import sys
+from unittest.mock import Mock, patch
 
 from src.poker_env.texas_holdem_env import TexasHoldemEnv
-from src.agents.random_agent import RandomAgent, CallAgent
 
 
 class TestCardToString:
@@ -258,33 +255,161 @@ class TestGameFlow:
 
 class TestChipTracking:
     """Test that chips are tracked correctly"""
-    
-    def test_chip_conservation(self):
-        """Test that total chips are conserved"""
-        env = TexasHoldemEnv(num_players=3, starting_stack=1000)
-        initial_chips = sum(p.stack for p in env.game_state.players)
+    def test_chip_conservation_debug_blinds(self):
+        """
+        Debug test to trace where the $10 goes.
+        Track blinds from posting to pot to winner.
+        """
+        env = TexasHoldemEnv(num_players=2, starting_stack=1000)
+        initial_total = 2000
         
         obs, info = env.reset()
         
-        # Play a few hands
-        for hand in range(3):
+        print("\n" + "="*80)
+        print("DEBUG: BLIND TRACKING")
+        print("="*80)
+        
+        # After reset (blinds posted)
+        print("\nAfter reset (blinds posted):")
+        for p in env.game_state.players:
+            print(f"  {p.name}: stack=${p.stack}, bet=${p.current_bet}, total_bet=${p.total_bet_this_hand}")
+        
+        pot_total = env.game_state.pot_manager.get_pot_total()
+        stacks_sum = sum(p.stack for p in env.game_state.players)
+        print(f"  Pot: ${pot_total}")
+        print(f"  Sum of stacks: ${stacks_sum}")
+        print(f"  Pot + Stacks: ${pot_total + stacks_sum}")
+        print(f"  Expected: ${initial_total}")
+        
+        if pot_total + stacks_sum != initial_total:
+            print(f"  ⚠ MISSING: ${initial_total - (pot_total + stacks_sum)}")
+        
+        # Play out hand
+        done = False
+        steps = 0
+        while not done and steps < 100:
+            action = env.action_space.sample()
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+            steps += 1
+        
+        print("\nAfter hand complete:")
+        for p in env.game_state.players:
+            print(f"  {p.name}: stack=${p.stack}, total_bet=${p.total_bet_this_hand}, "
+                f"total_winnings=${p.total_winnings}")
+        
+        # Check pot
+        pot_total = env.game_state.pot_manager.get_pot_total()
+        stacks_sum = sum(p.stack for p in env.game_state.players)
+        total_bet_sum = sum(p.total_bet_this_hand for p in env.game_state.players)
+        winnings_sum = sum(p.total_winnings for p in env.game_state.players)
+        
+        print(f"\nMetrics:")
+        print(f"  Pot (unsettled): ${pot_total}")
+        print(f"  Sum of stacks: ${stacks_sum}")
+        print(f"  Sum of total_bet_this_hand: ${total_bet_sum}")
+        print(f"  Sum of total_winnings: ${winnings_sum}")
+        print(f"  Total accounted: ${stacks_sum + total_bet_sum + winnings_sum}")
+        print(f"  Expected: ${initial_total}")
+        
+        if stacks_sum + total_bet_sum + winnings_sum != initial_total:
+            print(f"  ⚠ MISSING: ${initial_total - (stacks_sum + total_bet_sum + winnings_sum)}")
+        
+        # Core check
+        total_in_play = sum(p.stack for p in env.game_state.players)
+        total_by_winnings = sum(p.total_winnings for p in env.game_state.players)
+        
+        print(f"\nCore check:")
+        print(f"  Current stacks sum: ${total_in_play}")
+        print(f"  Sum of total_winnings: ${total_by_winnings}")
+        print(f"  Expected: ${initial_total}")
+        
+        # This should be true only if total_winnings captures EVERYTHING
+        # But if blinds get forfeited without being added to winnings, we lose them
+        
+        assert total_in_play + total_by_winnings == initial_total or \
+            total_in_play == initial_total, (
+            f"Chips missing! stacks={total_in_play} + winnings={total_by_winnings} "
+            f"!= {initial_total}"
+        )
+    def test_chip_conservation_comprehensive(self):
+        """
+        Comprehensive chip conservation test with hand history display.
+        Checks: sum(stack) + rake == sum(total_buy_in)
+        """
+        env = TexasHoldemEnv(num_players=3, starting_stack=1000)
+        initial_stacks = [p.stack for p in env.game_state.players]
+        total_initial_chips = sum(initial_stacks)
+        
+        print("\n" + "="*80)
+        print("CHIP CONSERVATION TEST - COMPREHENSIVE")
+        print("="*80)
+        
+        num_hands = 5
+        for hand_num in range(num_hands):
+            obs, info = env.reset()
+            
+            # Play hand
             done = False
             steps = 0
-            
             while not done and steps < 100:
                 action = env.action_space.sample()
                 obs, reward, terminated, truncated, info = env.step(action)
                 done = terminated or truncated
                 steps += 1
             
-            if done:
-                obs, info = env.reset()
+            # Display hand history with card visibility
+            env.game_state.display_hand_history()
+            
+            # === METRICS ===
+            current_sum = sum(p.stack for p in env.game_state.players)
+            total_buy_in_sum = sum(p.total_buy_in for p in env.game_state.players)
+            total_winnings_sum = sum(p.total_winnings for p in env.game_state.players)
+            
+            rake_collected = 0
+            if hasattr(env.game_state.pot_manager, 'total_rake'):
+                rake_collected = env.game_state.pot_manager.total_rake
+            
+            # Print metrics
+            print(f"\n{'='*80}")
+            print(f"CHIP CONSERVATION METRICS - Hand {hand_num + 1}")
+            print(f"{'='*80}")
+            print(f"  Current stacks sum: ${current_sum}")
+            print(f"  Total buy-in sum: ${total_buy_in_sum}")
+            print(f"  Total winnings sum: ${total_winnings_sum}")
+            print(f"  Rake collected: ${rake_collected}")
+            print(f"  Expected total: ${total_initial_chips}")
+            
+            # Per-player breakdown
+            print(f"\nPer-player breakdown:")
+            for p in env.game_state.players:
+                print(f"  {p.name}: stack=${p.stack}, buy_in=${p.total_buy_in}, winnings=${p.total_winnings}")
+            
+            # === INVARIANTS ===
+            assert current_sum + rake_collected == total_initial_chips, (
+                f"Hand {hand_num}: Chip conservation failed! "
+                f"stacks={current_sum} + rake={rake_collected} != initial={total_initial_chips}"
+            )
+            
+            assert total_buy_in_sum == total_initial_chips, (
+                f"Hand {hand_num}: Buy-in sum incorrect! "
+                f"buy_in_sum={total_buy_in_sum} != initial={total_initial_chips}"
+            )
+            
+            # Per-player invariant
+            for p in env.game_state.players:
+                if p.total_buy_in == initial_stacks[p.player_id]:
+                    expected = initial_stacks[p.player_id] + p.total_winnings
+                    assert p.stack == expected, (
+                        f"Hand {hand_num}, {p.name}: stack={p.stack} != "
+                        f"initial={initial_stacks[p.player_id]} + winnings={p.total_winnings}"
+                    )
+            
+            print(f"\n✓ Hand {hand_num + 1}: All metrics consistent\n")
         
-        final_chips = sum(p.stack for p in env.game_state.players)
-        
-        # Chips might differ due to rake
-        assert final_chips <= initial_chips, "Chips should not increase"
-
+        print("="*80)
+        print("✓ CHIP CONSERVATION COMPREHENSIVE TEST PASSED")
+        print("="*80)
 
 class TestCardDisplay:
     """Test card display formatting"""

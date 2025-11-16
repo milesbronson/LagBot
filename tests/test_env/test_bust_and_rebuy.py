@@ -3,10 +3,7 @@ Tests for player bust and rebuy mechanics - verify chip tracking
 """
 
 import pytest
-import numpy as np
 from src.poker_env.texas_holdem_env import TexasHoldemEnv
-from src.poker_env.player import Player
-from src.agents.random_agent import RandomAgent
 
 
 class TestPlayerBust:
@@ -31,7 +28,7 @@ class TestPlayerBust:
         
         env.reset()
         
-        total_after_reset = sum(p.stack for p in env.game_state.players)
+        total_after_reset = sum((p.stack + p.total_winnings) for p in env.game_state.players)
         
         # All players should be reset to starting_stack
         assert total_after_reset == initial_total
@@ -53,11 +50,11 @@ class TestPlayerBust:
             steps += 1
         
         # Get chip total after hand
-        final_total = sum(p.stack for p in env.game_state.players)
+        final_total = sum((p.stack + p.total_winnings) for p in env.game_state.players)
         
         # Chips should be conserved (minus rake)
         assert final_total <= initial_total, f"Chips increased! Initial: {initial_total}, Final: {final_total}"
-        print(f"\nChip Conservation Single Hand:")
+        print("\nChip Conservation Single Hand:")
         print(f"  Initial: ${initial_total}")
         print(f"  Final:   ${final_total}")
         print(f"  Difference (rake): ${initial_total - final_total}")
@@ -162,7 +159,7 @@ class TestPlayerRebuy:
         total_with_bust = sum(p.stack for p in env.game_state.players)
         assert total_with_bust == initial_total - original_stack
         
-        print(f"\nRebuy Test:")
+        print("\nRebuy Test:")
         print(f"  Initial total: ${initial_total}")
         print(f"  After bust: ${total_with_bust}")
         
@@ -185,7 +182,7 @@ class TestPlayerRebuy:
         obs, info = env.reset()
         initial_total = sum(p.stack for p in env.game_state.players)
         
-        print(f"\nRebuy Sequence Test:")
+        print("\nRebuy Sequence Test:")
         print(f"  Starting total: ${initial_total}")
         
         # Scenario: Player 0 busts, rebuys
@@ -219,7 +216,7 @@ class TestPlayerRebuy:
         
         # Verify
         assert total_after_rebuy_2 == total_after_bust_2 + rebuy_2
-        print(f"  Final verification: chips properly tracked through busts and rebuys ✓")
+        print("  Final verification: chips properly tracked through busts and rebuys ✓")
     
     def test_chip_accounting_with_rake_and_rebuy(self, env):
         """Test chip accounting with rake deductions and rebuys"""
@@ -227,9 +224,9 @@ class TestPlayerRebuy:
         env.game_state.pot_manager.rake_percent = 0.05  # 5% rake
         
         initial_total = sum(p.stack for p in env.game_state.players)
-        print(f"\nChip Accounting with Rake and Rebuy:")
+        print("\nChip Accounting with Rake and Rebuy:")
         print(f"  Starting total: ${initial_total}")
-        print(f"  Rake: 5%")
+        print("  Rake: 5%")
         
         total_rake_paid = 0
         
@@ -285,7 +282,7 @@ class TestPlayerRebuy:
         assert final_total == expected_final, (
             f"Chip accounting error! Expected ${expected_final}, got ${final_total}"
         )
-        print(f"  Chip accounting verified ✓")
+        print("  Chip accounting verified ✓")
 
 
 class TestChipFlowTracking:
@@ -304,7 +301,7 @@ class TestChipFlowTracking:
         print("DETAILED CHIP FLOW REPORT")
         print("="*60)
         
-        print(f"\nInitial State:")
+        print("\nInitial State:")
         print(f"  Total chips: ${initial_total}")
         for i, player in enumerate(env.game_state.players):
             print(f"    Player {i}: ${player.stack}")

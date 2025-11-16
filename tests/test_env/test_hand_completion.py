@@ -6,7 +6,6 @@ Helps debug the 17,800 steps issue
 
 import pytest
 from src.poker_env.game_state import GameState, BettingRound
-from src.poker_env.player import Player
 
 
 class TestHandCompletionBasics:
