@@ -189,6 +189,15 @@ python play.py --model models/quick_test/final_model.zip
 
 # 4. Longer training (1 hour+)
 python train.py --name full_training
+
+# Auto-loads the most recent trained model
+python play.py --opponents 2
+
+# Or specify a model explicitly (as before)
+python play.py --model models/run_20231115_143022/final_model.zip --opponents 2
+
+# Random bots
+python play.py --opponent-type random --opponents 3
 ```
 
 Happy training! 🎰

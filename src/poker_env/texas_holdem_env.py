@@ -99,6 +99,7 @@ class TexasHoldemEnv(gym.Env):
         
         for player in self.game_state.players:
             if player.stack <= 0:
+                player.record_buy_in(self.starting_stack)  
                 player.stack = self.starting_stack
         
         self.game_state.start_new_hand()
@@ -157,7 +158,9 @@ class TexasHoldemEnv(gym.Env):
             if self.include_all_in and action == last_action_idx:
                 # All-in action
                 player = self.game_state.get_current_player()
-                return 2, player.stack  # Raise by entire stack
+                #print(player.stack)
+                to_call = self.game_state.pot_manager.current_bet - player.current_bet
+                return 2, player.stack - to_call # Raise by entire stack
             
             # Otherwise it's a raise bin action
             bin_idx = action - 2
@@ -166,7 +169,9 @@ class TexasHoldemEnv(gym.Env):
             
             player = self.game_state.get_current_player()
             pot = self.game_state.pot_manager.get_pot_total()
+            #print(pot)
             to_call = self.game_state.pot_manager.current_bet - player.current_bet
+            #print(to_call)
             
             raise_chips = int(pot * self.raise_bins[bin_idx])
             raise_chips = self.game_state.pot_manager._round_to_big_blind(raise_chips)

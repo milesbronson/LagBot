@@ -20,6 +20,7 @@ class MetricsCallback(BaseCallback):
         self.episode_wins = 0
         self.episode_count = 0
         self.last_logged_step = 0
+            
 
     def set_model(self, model) -> None:
         """Set the model attribute - required by BaseCallback"""

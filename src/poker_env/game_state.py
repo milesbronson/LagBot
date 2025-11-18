@@ -67,7 +67,7 @@ class HandHistory:
             self.hole_cards[player_id] = cards.copy()
     
     def record_action(self, street_name: str, player_id: int, player_name: str,
-                     action: str, amount: int = 0, total_bet: int = 0):
+                    action: str, amount: int = 0, total_bet: int = 0, pot_size: int = 0):
         """Record a player action"""
         self.actions.append({
             'street': street_name,
@@ -75,7 +75,8 @@ class HandHistory:
             'player_name': player_name,
             'action': action.lower(),
             'amount': amount,
-            'total_bet': total_bet
+            'total_bet': total_bet,
+            'pot_size': pot_size
         })
     
     def record_community_cards(self, street: str, cards: List[int]):
@@ -177,7 +178,7 @@ class HandHistory:
         action = action_record['action']
         amount = action_record['amount']
         total_bet = action_record['total_bet']
-        
+        pot = action_record.get('pot_size', 0)
         if action == 'small blind':
             print(f"   {name} posts small blind ${amount}")
         elif action == 'big blind':
@@ -196,7 +197,8 @@ class HandHistory:
             print(f"   {name} goes all-in for ${amount}")
         else:
             print(f"   {name}: {action} ${amount}")
-    
+        print(f"   {action_record['player_name']}: {action_record['action']} (Pot: ${pot})")
+
     def _get_hand_description(self, player_id: int) -> str:
         """Get human-readable hand description"""
         if player_id not in self.hand_ranks:
@@ -337,20 +339,29 @@ class GameState:
         """Check if the current betting round is complete"""
         active_players = self.get_active_players()
         
-        if len(active_players) <= 1:
-            return True
-        
+        # if len(active_players) <= 1:
+        #     return True
+        print("In is_betting_round_complete functions")
         players_who_can_act = [p for p in active_players if not p.is_all_in]
         
         if not players_who_can_act:
+            print("Betting Round Complete - No Players to Act")
+
             return True
         
-        if self.num_actions_this_round < len(players_who_can_act):
-            return False
+        # if self.num_actions_this_round < len(players_who_can_act):
+        #     print("Betting Round Not Complete - Too Many Actions")
+
+        #     return False
         
         current_bet = self.pot_manager.current_bet
+        print(f"Current Bet {current_bet}")
+        print("Players: ")
+        print(players_who_can_act)
         for player in players_who_can_act:
+            print(f"Player current bet: {player.current_bet}")
             if player.current_bet != current_bet:
+                print("Betting Round Not Complete - Not all players matched bet")
                 return False
         
         return True
@@ -399,7 +410,8 @@ class GameState:
                 self.betting_round.name,
                 player.player_id,
                 player.name,
-                'fold'
+                'fold',
+                pot_size=self.pot_manager.get_pot_total()
             )
             
         elif action == 1:
@@ -411,7 +423,8 @@ class GameState:
                     self.betting_round.name,
                     player.player_id,
                     player.name,
-                    'check'
+                    'check',
+                    pot_size=self.pot_manager.get_pot_total()
                 )
             elif action_type == "call":
                 self.hand_history.record_action(
@@ -419,7 +432,8 @@ class GameState:
                     player.player_id,
                     player.name,
                     'call',
-                    amount=to_call
+                    amount=to_call,
+                    pot_size=self.pot_manager.get_pot_total()
                 )
             
         elif action == 2:
@@ -427,26 +441,32 @@ class GameState:
                 raise_amount = self.pot_manager.min_raise
             
             to_call = self.pot_manager.current_bet - player.current_bet
+            #print(f"To call {to_call}")
             total_bet = to_call + raise_amount
+            #print(f"Total Bet {total_bet}")
             _, action_type = self.pot_manager.place_bet(player, total_bet)
             
             if action_type == "raise":
+                #print("Just raising")
                 self.hand_history.record_action(
                     self.betting_round.name,
                     player.player_id,
                     player.name,
                     'raise',
                     amount=raise_amount,
-                    total_bet=player.current_bet
+                    total_bet=player.current_bet,
+                    pot_size=self.pot_manager.get_pot_total()
                 )
                 self.last_aggressor_idx = self.current_player_idx
             elif action_type == "all-in":
+                #print("Going all in")
                 self.hand_history.record_action(
                     self.betting_round.name,
                     player.player_id,
                     player.name,
                     'all-in',
-                    amount=total_bet
+                    amount=total_bet,
+                    pot_size=self.pot_manager.get_pot_total()
                 )
         
         self.num_actions_this_round += 1
@@ -477,8 +497,11 @@ class GameState:
             hand_ranks
         )
         
-        for player_id, amount in winnings.items():
-            self.players[player_id].add_chips(amount)
+        # Record winnings for ALL players (winners get positive, losers get negative/0)
+        for player in self.players:
+            amount = winnings.get(player.player_id, 0)
+            player.add_chips(amount)
+            player.record_hand_winnings()  # Record loss if 0 winnings
         
         return winnings
     
@@ -500,9 +523,10 @@ class GameState:
             self.hand_history.display()
     
     def add_player(self, stack: int) -> int:
-        """Add a new player to the game"""
         player_id = len(self.players)
-        self.players.append(Player(player_id=player_id, stack=stack))
+        new_player = Player(player_id=player_id, stack=stack)
+        new_player.record_buy_in(stack)
+        self.players.append(new_player)
         return player_id
     
     def remove_player(self, player_id: int):

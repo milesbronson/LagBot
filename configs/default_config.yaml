@@ -16,15 +16,15 @@ environment:
 
 training:
   total_timesteps: 1000000
-  learning_rate: 0.0003
+  learning_rate: 0.001
   n_steps: 3000
   batch_size: 128
-  n_epochs: 10  
+  n_epochs: 5
   gamma: 0.99
   gae_lambda: 0.95
   clip_range: 0.2
   ent_coef: 0.01
-  vf_coef: 0.1
+  vf_coef: 0.5
   max_grad_norm: 0.5
   
 # PPO settings

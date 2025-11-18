@@ -10,8 +10,8 @@ from src.utils import ModelManager
 from src.agents.ppo_agent import PPOAgent
 from src.agents.human_agent import HumanAgent
 from src.agents.random_agent import RandomAgent, CallAgent
-from agent_performance_tracker import SessionTracker
-
+from src.utils.agent_performance_tracker import SessionTracker
+from treys import Card
 
 class FlexibleHumanAgent(HumanAgent):
     """Human agent that can raise any amount"""
@@ -33,14 +33,15 @@ class FlexibleHumanAgent(HumanAgent):
         # Show community cards
         community = self.env.game_state.community_cards
         if community:
-            cards_str = " ".join([self._card_to_string(card) for card in community])
+            cards_str = " ".join([Card.int_to_str(card) for card in community])
             print(f"\nCommunity Cards: {cards_str}")
         else:
             print("\nCommunity Cards: (pre-flop)")
         
         # Show your hole cards
-        your_cards = " ".join([self._card_to_string(card) for card in current_player.hand])
+        your_cards = " ".join([Card.int_to_str(card) for card in current_player.hand])
         print(f"Your Hand: {your_cards}")
+
         
         print("\n" + "-"*60)
         
@@ -121,30 +122,6 @@ class FlexibleHumanAgent(HumanAgent):
             except (KeyboardInterrupt, EOFError):
                 print("\nDefaulting to fold.")
                 return 0, None
-    
-    def _card_to_string(self, card):
-        """Convert a card integer to readable format (e.g., 'A♠', 'K♥')"""
-        if card == 0:
-            return "?"
-        
-        # Treys library encoding: 2s=8, 3s=16, 4s=32, ..., As=2048, 2h=4, 3h=8, etc.
-        # Rank: 0=deuce, 1=trey, ..., 11=king, 12=ace
-        # Suit: 1=spades, 2=hearts, 4=diamonds, 8=clubs
-        
-        rank_names = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A']
-        suit_names = {1: '♠', 2: '♥', 4: '♦', 8: '♣'}
-        
-        # Extract rank and suit from Treys encoding
-        rank = (card >> 8) - 1  # Rank is in bits 8-11
-        suit = 1 << (card & 0xF)  # Suit is in bits 0-3
-        
-        if rank < 0 or rank >= len(rank_names):
-            return "?"
-        
-        rank_str = rank_names[rank]
-        suit_str = suit_names.get(suit, '?')
-        
-        return f"{rank_str}{suit_str}"
 
 
 class BotWithDiscreteActions:
@@ -236,10 +213,14 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
             hand_number += 1
             
             if env.game_state.players[0].stack <= 0:
-                print("\n" + "="*60)
-                print("You're out of chips! Game over.")
-                print("="*60)
-                break
+                print("\nYou're out of chips!")
+                rebuy = input("Rebuy for $1000? (y/n): ").strip().lower()
+                if rebuy == 'y':
+                    env.game_state.players[0].record_buy_in(1000)
+                    env.game_state.players[0].stack = 1000
+                else:
+                    print("Game over.")
+                    break
             
             obs, info = env.reset()
             
@@ -297,17 +278,21 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
             print("="*60)
             env.render()
             
+            # Update tracker with hand results using player.total_winnings
             if 'winnings' in info:
                 print("\nResults:")
                 for player_id, amount in info['winnings'].items():
+                    player = env.game_state.players[player_id]
                     if amount > 0:
-                        player = env.game_state.players[player_id]
                         print(f"  {player.name} wins ${amount}!")
-                        tracker.record_hand_result(player_id, amount, hand_won=True)
-                    elif amount < 0:
-                        # Track losses for other players
-                        player = env.game_state.players[player_id]
-                        tracker.record_hand_result(player_id, amount, hand_won=False)
+                        hand_won = True
+                    else:
+                        hand_won = False
+                    
+                    # Record hand result
+                    tracker.record_hand_result(player_id, hand_won=hand_won)
+                    # Update net winnings from player.total_winnings
+                    tracker.update_agent_winnings(player_id, player.total_winnings)
             
             print("\nChip Stacks:")
             total_chips = sum(p.stack for p in env.game_state.players)
