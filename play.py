@@ -112,7 +112,7 @@ class FlexibleHumanAgent(HumanAgent):
                             print(f"\nYou will contribute ${total_contribution} total")
                             print(f"(Call ${to_call} + Raise ${raise_amount})")
                             
-                            return action, total_contribution
+                            return action, raise_amount
                         
                         except ValueError:
                             print("Invalid amount. Enter a number.")

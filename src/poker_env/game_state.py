@@ -339,8 +339,8 @@ class GameState:
         """Check if the current betting round is complete"""
         active_players = self.get_active_players()
         
-        # if len(active_players) <= 1:
-        #     return True
+        if len(active_players) <= 1:
+            return True
         print("In is_betting_round_complete functions")
         players_who_can_act = [p for p in active_players if not p.is_all_in]
         
@@ -349,10 +349,8 @@ class GameState:
 
             return True
         
-        # if self.num_actions_this_round < len(players_who_can_act):
-        #     print("Betting Round Not Complete - Too Many Actions")
-
-        #     return False
+        if self.num_actions_this_round < len(players_who_can_act):
+            return False
         
         current_bet = self.pot_manager.current_bet
         print(f"Current Bet {current_bet}")
@@ -401,6 +399,7 @@ class GameState:
     
     def execute_action(self, action: int, raise_amount: Optional[int] = None) -> str:
         """Execute a player action and record in history"""
+        print(f"In execute_action() {action}")
         player = self.get_current_player()
         
         if action == 0:
@@ -439,12 +438,12 @@ class GameState:
         elif action == 2:
             if raise_amount is None:
                 raise_amount = self.pot_manager.min_raise
-            
+            print(f"Raise amount {raise_amount}")
             to_call = self.pot_manager.current_bet - player.current_bet
-            #print(f"To call {to_call}")
+            print(f"To call {to_call}")
             total_bet = to_call + raise_amount
-            #print(f"Total Bet {total_bet}")
-            _, action_type = self.pot_manager.place_bet(player, total_bet)
+            print(f"Total Bet {total_bet}")
+            _, action_type = self.pot_manager.place_bet(player, raise_amount)
             
             if action_type == "raise":
                 #print("Just raising")

@@ -148,6 +148,7 @@ class TexasHoldemEnv(gym.Env):
     
     def _validate_and_convert_action(self, action: int) -> Tuple[int, Optional[int]]:
         """Convert raw action to (action_type, raise_amount)"""
+        print(f"In validate_and_convert")
         if action == 0:
             return 0, None
         elif action == 1:
@@ -169,13 +170,13 @@ class TexasHoldemEnv(gym.Env):
             
             player = self.game_state.get_current_player()
             pot = self.game_state.pot_manager.get_pot_total()
-            #print(pot)
+            print(f"Pot Size {pot}")
             to_call = self.game_state.pot_manager.current_bet - player.current_bet
-            #print(to_call)
+            print(f"To Call: {to_call}")
             
             raise_chips = int(pot * self.raise_bins[bin_idx])
             raise_chips = self.game_state.pot_manager._round_to_big_blind(raise_chips)
-            
+            print(f"Raise Chips {raise_chips}")
             if raise_chips < self.game_state.pot_manager.min_raise:
                 raise_chips = self.game_state.pot_manager.min_raise
             
@@ -227,6 +228,8 @@ class TexasHoldemEnv(gym.Env):
     
     def step_with_raise(self, action: int, raise_amount: Optional[int] = None) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
         """Execute action with custom raise amount (for humans)"""
+        print("In step_with_raise")
+        print(f"raise amount: {raise_amount}")
         current_player = self.game_state.get_current_player()
         starting_stack = current_player.stack + current_player.total_bet_this_hand
         

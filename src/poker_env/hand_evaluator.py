@@ -84,6 +84,7 @@ class HandEvaluator:
         """Convert card string to integer representation"""
         return Card.new(card_str)
     
+    
     @staticmethod
     def create_deck() -> List[int]:
         deck = Deck()
