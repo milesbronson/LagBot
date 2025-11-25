@@ -106,7 +106,7 @@ class PotManager:
         FIX: Properly updates current_bet for raises, but NOT for calls/all-ins that 
         just match or go short of the to_call amount.
         """
-        print("In Place_bet function")
+        #print("In Place_bet function")
         # Check if this is a check
         if amount == 0 and self.current_bet == player.current_bet:
             return 0, "check"
@@ -119,9 +119,9 @@ class PotManager:
             return 0, "fold"
         
         # Place the bet
-        print(f"Bet amount: {amount}")
+        #print(f"Bet amount: {amount}")
         actual_bet = player.bet(amount)
-        print(f"Actual amount {actual_bet}")
+        #print(f"Actual amount {actual_bet}")
         self.pots[0].add_chips(actual_bet)
         
         # Determine action and update current_bet ONLY for raises

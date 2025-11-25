@@ -1,5 +1,9 @@
 """
-Training script with metrics dashboard support and automatic dashboard generation
+Training script for PPO poker agent with fixed opponents
+3-player environment:
+- Player 0: Main PPO Agent (learning)
+- Player 1: CallAgent (fixed)
+- Player 2: RandomAgent (fixed)
 """
 
 import argparse
@@ -7,11 +11,13 @@ import yaml
 import os
 from datetime import datetime
 import numpy as np
+from typing import List, Tuple
 
 from src.poker_env.texas_holdem_env import TexasHoldemEnv
 from src.agents.ppo_agent import PPOAgent, TrainingCallback
+from src.agents.random_agent import CallAgent, RandomAgent
 from src.training.metrics import TrainingMetrics
-from src.training.callbacks import SimpleMetricsCallback, MetricsCallback
+from src.training.callbacks import MetricsCallback
 
 
 def load_config(config_path: str) -> dict:
@@ -21,8 +27,66 @@ def load_config(config_path: str) -> dict:
     return config
 
 
+class MultiAgentWrapper:
+    """
+    Wraps environment to handle non-learning agents automatically.
+    Only the main agent (player 0) learns.
+    """
+    
+    def __init__(self, env: TexasHoldemEnv, 
+                 main_agent: PPOAgent,
+                 opponents: List[Tuple[str, object]]):
+        """
+        Args:
+            env: TexasHoldemEnv with 3 players
+            main_agent: PPO agent to train
+            opponents: [(type, agent), ...] for players 1-2
+        """
+        self.env = env
+        self.main_agent = main_agent
+        self.opponents = opponents
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+        
+        print(f"Training setup:")
+        print(f"  Player 0: Main PPO Agent")
+        for i, (atype, agent) in enumerate(opponents, 1):
+            print(f"  Player {i}: {atype.upper()} - {agent.name}")
+    
+    def reset(self):
+        """Reset and return observation for main agent"""
+        obs, info = self.env.reset()
+        return obs, info
+    
+    def step(self, action: int):
+        """
+        Execute main agent action, then handle opponent turns
+        """
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        
+        # Auto-play opponents until main agent's turn or hand ends
+        while not (terminated or truncated) and self.env.game_state.get_current_player_index() != 0:
+            current_idx = self.env.game_state.get_current_player_index()
+            opponent_idx = current_idx - 1
+            
+            if opponent_idx < len(self.opponents):
+                atype, opponent = self.opponents[opponent_idx]
+                action = opponent.select_action(obs)
+                obs, _, terminated, truncated, info = self.env.step(action)
+            else:
+                break
+        
+        return obs, reward, terminated, truncated, info
+    
+    def render(self):
+        self.env.render()
+    
+    def close(self):
+        self.env.close()
+
+
 def train(config_path: str, run_name: str = None):
-    """Train a PPO agent with metrics collection and dashboard generation"""
+    """Train PPO agent against CallAgent and RandomAgent"""
     
     config = load_config(config_path)
     
@@ -35,10 +99,10 @@ def train(config_path: str, run_name: str = None):
     print(f"Configuration: {config_path}")
     print()
     
-    # Create environment
+    # Create 3-player environment
     env_config = config['environment']
     env = TexasHoldemEnv(
-        num_players=env_config['num_players'],
+        num_players=3,
         starting_stack=env_config['starting_stack'],
         small_blind=env_config['small_blind'],
         big_blind=env_config['big_blind'],
@@ -48,24 +112,24 @@ def train(config_path: str, run_name: str = None):
         reset_stacks_every_n_timesteps=env_config.get('reset_stacks_every_n_timesteps')
     )
     
-    print(f"Environment: {env_config['num_players']} players, "
-          f"Starting stack: ${env_config['starting_stack']}, "
-          f"Blinds: ${env_config['small_blind']}/${env_config['big_blind']}")
+    print(f"Environment: 3 players")
+    print(f"  Starting stack: ${env_config['starting_stack']}")
+    print(f"  Blinds: ${env_config['small_blind']}/${env_config['big_blind']}")
     print()
     
     # Create metrics
     metrics = TrainingMetrics(run_name, save_dir="metrics")
-    print(f"Metrics will be saved to: metrics/{run_name}/")
+    print(f"Metrics: metrics/{run_name}/")
     print()
     
-    # Create agent
+    # Create directories
     training_config = config['training']
-    
     log_dir = os.path.join(config['logging']['log_dir'], run_name)
     model_dir = os.path.join(config['logging']['model_dir'], run_name)
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
     
+    # Create main agent
     agent = PPOAgent(
         env=env,
         name=f"PPO_{run_name}",
@@ -84,6 +148,17 @@ def train(config_path: str, run_name: str = None):
     print(f"Total timesteps: {training_config['total_timesteps']:,}")
     print()
     
+    # Create opponents
+    call_agent = CallAgent(name="CallAgent")
+    random_agent = RandomAgent(name="RandomAgent")
+    opponents = [
+        ('call', call_agent),
+        ('random', random_agent)
+    ]
+    
+    # Wrap environment
+    wrapped_env = MultiAgentWrapper(env, agent, opponents)
+    
     # Create callbacks
     save_freq = config['logging']['save_frequency']
     save_callback = TrainingCallback(
@@ -98,14 +173,7 @@ def train(config_path: str, run_name: str = None):
     
     # Train
     print("Starting training...")
-    print(f"Tensorboard logs: {log_dir}")
-    print(f"Models will be saved to: {model_dir}")
-    print(f"Metrics will be saved to: metrics/{run_name}/")
-    print()
-    print("To monitor training:")
-    print(f"  1. Tensorboard: tensorboard --logdir {log_dir}")
-    print(f"  2. Dashboard: python -c \"from src.training.dashboard import TrainingDashboard; d = TrainingDashboard(); d.plot_single_run('{run_name}', 'dashboard.png')\"")
-    print(f"  3. Report: python dashboard_gen.py")
+    print(f"Tensorboard: tensorboard --logdir {log_dir}")
     print()
     
     agent.train(
@@ -117,76 +185,29 @@ def train(config_path: str, run_name: str = None):
     final_model_path = os.path.join(model_dir, "final_model")
     agent.save(final_model_path)
     
-    # Generate summary
-    summary = metrics.get_summary()
-    
     print()
     print("="*60)
     print("Training Complete!")
     print("="*60)
-    print(f"Final model: {final_model_path}")
-    print(f"Metrics: metrics/{run_name}/metrics.json")
+    print(f"Model saved to: {final_model_path}")
+    print(f"Tensorboard: tensorboard --logdir {log_dir}")
     print()
-    print("Summary:")
-    print(f"  Total Timesteps: {summary.get('total_timesteps', 0):,}")
-    print(f"  Final Reward: {summary.get('current_reward', 0):.2f}")
-    print(f"  Avg Reward (100): {summary.get('avg_reward_100', 0):.2f}")
-    print(f"  Win Rate: {summary.get('win_rate', 0):.1%}")
-    print("="*60)
-    
-    # Generate dashboards
-    print("\nGenerating dashboards...")
-    try:
-        from src.training.dashboard import TrainingDashboard
-        
-        dashboard = TrainingDashboard()
-        
-        # Load action history
-        action_history = dashboard.dashboard.load_action_history(run_name)
-        
-        # Generate combined dashboard with action distribution
-        dashboard_path = os.path.join(model_dir, f"dashboard_combined_{run_name}.png")
-        dashboard.plot_combined_dashboard(
-            metrics=metrics.metrics,
-            action_history=action_history,
-            save_path=dashboard_path
-        )
-        print(f"✓ Combined dashboard saved: {dashboard_path}")
-        
-        # Also generate standard dashboard
-        standard_dashboard_path = os.path.join(model_dir, f"dashboard_{run_name}.png")
-        dashboard.plot_single_run(run_name, save_path=standard_dashboard_path)
-        print(f"✓ Standard dashboard saved: {standard_dashboard_path}")
-        
-    except Exception as e:
-        print(f"⚠ Warning: Could not generate dashboards: {e}")
-    
-    print()
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Train a PPO poker agent")
-    parser.add_argument(
-        '--config',
-        type=str,
-        default='configs/default_config.yaml',
-        help='Path to configuration file'
-    )
-    parser.add_argument(
-        '--name',
-        type=str,
-        default=None,
-        help='Name for this training run'
-    )
-    
-    args = parser.parse_args()
-    
-    if not os.path.exists(args.config):
-        print(f"Error: Config file not found: {args.config}")
-        return
-    
-    train(args.config, args.name)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Train PPO poker bot")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/default_config.yaml",
+        help="Path to config file"
+    )
+    parser.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="Custom run name"
+    )
+    
+    args = parser.parse_args()
+    train(args.config, args.name)

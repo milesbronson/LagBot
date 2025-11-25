@@ -341,11 +341,11 @@ class GameState:
         
         if len(active_players) <= 1:
             return True
-        print("In is_betting_round_complete functions")
+        #print("In is_betting_round_complete functions")
         players_who_can_act = [p for p in active_players if not p.is_all_in]
         
         if not players_who_can_act:
-            print("Betting Round Complete - No Players to Act")
+            #print("Betting Round Complete - No Players to Act")
 
             return True
         
@@ -353,13 +353,13 @@ class GameState:
             return False
         
         current_bet = self.pot_manager.current_bet
-        print(f"Current Bet {current_bet}")
-        print("Players: ")
-        print(players_who_can_act)
+        #print(f"Current Bet {current_bet}")
+        #print("Players: ")
+        #print(players_who_can_act)
         for player in players_who_can_act:
-            print(f"Player current bet: {player.current_bet}")
+            #print(f"Player current bet: {player.current_bet}")
             if player.current_bet != current_bet:
-                print("Betting Round Not Complete - Not all players matched bet")
+                #print("Betting Round Not Complete - Not all players matched bet")
                 return False
         
         return True
@@ -399,7 +399,7 @@ class GameState:
     
     def execute_action(self, action: int, raise_amount: Optional[int] = None) -> str:
         """Execute a player action and record in history"""
-        print(f"In execute_action() {action}")
+        #print(f"In execute_action() {action}")
         player = self.get_current_player()
         
         if action == 0:
@@ -438,11 +438,11 @@ class GameState:
         elif action == 2:
             if raise_amount is None:
                 raise_amount = self.pot_manager.min_raise
-            print(f"Raise amount {raise_amount}")
+            #print(f"Raise amount {raise_amount}")
             to_call = self.pot_manager.current_bet - player.current_bet
-            print(f"To call {to_call}")
+            #print(f"To call {to_call}")
             total_bet = to_call + raise_amount
-            print(f"Total Bet {total_bet}")
+            #print(f"Total Bet {total_bet}")
             _, action_type = self.pot_manager.place_bet(player, raise_amount)
             
             if action_type == "raise":

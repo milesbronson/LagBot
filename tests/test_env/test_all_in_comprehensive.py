@@ -591,13 +591,13 @@ class TestAllInCurrentBetFix:
         print(f"  current_bet={game.pot_manager.current_bet}")
         
         # P0 raises to 50
-        print(f"\n1. P0 raises to 50")
-        game.execute_action(2, raise_amount=45)  # 45 more + 5 blind = 50
+        print(f"\n1. P1 raises to 50")
+        game.execute_action(2, raise_amount=50)  # 45 more + 5 blind = 50
         assert game.pot_manager.current_bet == 50
         print(f"   ✓ current_bet = 50")
         
         # P1 goes all-in for 200 (re-raise)
-        print(f"\n2. P1 goes all-in for ~990 total")
+        print(f"\n2. P2 goes all-in for ~990 total")
         game.execute_action(2, raise_amount=980)  # Raise 980 more
         assert game.pot_manager.current_bet == p1.current_bet
         assert p1.is_all_in
