@@ -1,5 +1,5 @@
 """
-OpenAI Gym environment with pot-based raise actions + all-in
+OpenAI Gym environment with pot-based raise actions + all-in + opponent tracking
 """
 
 import gymnasium as gym
@@ -9,6 +9,7 @@ from typing import Tuple, Dict, Any, Optional, List
 
 from src.poker_env.game_state import GameState, BettingRound
 from src.poker_env.hand_evaluator import HandEvaluator
+from src.poker_env.opponent_tracker import OpponentTracker, Action, Street
 
 
 class TexasHoldemEnv(gym.Env):
@@ -20,9 +21,15 @@ class TexasHoldemEnv(gym.Env):
     - 1: Check/Call  
     - 2 to N-1: Raise by bin[0], bin[1], ... (pot-based percentages)
     - N: All-in
+    
+    Observation Space: 32 base dims + 36 opponent stats (9 opponents × 4 features)
     """
     
     metadata = {'render.modes': ['human']}
+    
+    # Opponent tracking constants
+    MAX_OPPONENTS = 9
+    FEATURES_PER_OPPONENT = 4  # VPIP, PFR, AF, confidence
     
     def __init__(
         self,
@@ -35,12 +42,14 @@ class TexasHoldemEnv(gym.Env):
         min_raise_multiplier: float = 1.0,
         raise_bins: Optional[List[float]] = None,
         include_all_in: bool = True,
-        reset_stacks_every_n_timesteps: Optional[int] = None  # ← ADD THIS
+        reset_stacks_every_n_timesteps: Optional[int] = None,
+        track_opponents: bool = True
     ):
         """
         Args:
             raise_bins: List of pot percentages (e.g., [0.5, 1.0, 2.0])
             include_all_in: If True, add all-in as last action
+            track_opponents: If True, include opponent stats in observation (68 dims vs 32)
         """
         super().__init__()
         
@@ -56,6 +65,7 @@ class TexasHoldemEnv(gym.Env):
         self.reset_stacks_every_n_timesteps = reset_stacks_every_n_timesteps
         self.timesteps_since_reset = 0
         self.total_timesteps = 0
+        self.track_opponents = track_opponents
         
         self.game_state = GameState(
             num_players=num_players,
@@ -73,13 +83,19 @@ class TexasHoldemEnv(gym.Env):
         num_all_in = 1 if include_all_in else 0
         self.action_space = spaces.Discrete(2 + num_raise_actions + num_all_in)
         
-        obs_size = 7 * 4 + 4 + 4
+        # Observation space: base (32) + opponent stats (36 if tracking)
+        base_obs_size = 7 * 4 + 4 + 4  # 32
+        opponent_obs_size = self.MAX_OPPONENTS * self.FEATURES_PER_OPPONENT if track_opponents else 0
+        obs_size = base_obs_size + opponent_obs_size
+        
         self.observation_space = spaces.Box(
             low=0, high=np.inf, shape=(obs_size,), dtype=np.float32
         )
         
         self.current_agent = 0
-        
+        self.opponent_tracker = OpponentTracker(max_history_hands=1000)
+        self.player_positions = {}
+    
     def set_raise_bins(self, raise_bins: List[float]):
         """Update raise bins and action space"""
         self.raise_bins = sorted(raise_bins)
@@ -103,6 +119,19 @@ class TexasHoldemEnv(gym.Env):
                 player.stack = self.starting_stack
         
         self.game_state.start_new_hand()
+        
+        # Start opponent tracking for this hand
+        players = [{'id': p.player_id, 'name': p.name, 'stack': p.stack} 
+                   for p in self.game_state.players]
+        self.opponent_tracker.start_hand(
+            hand_number=self.game_state.hand_number,
+            players=players,
+            dealer_position=self.game_state.button_position,
+            small_blind=self.small_blind,
+            big_blind=self.big_blind
+        )
+        self._calculate_player_positions()
+        
         return self._get_observation(), {}
     
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
@@ -110,16 +139,38 @@ class TexasHoldemEnv(gym.Env):
         current_player = self.game_state.get_current_player()
         starting_stack = current_player.stack + current_player.total_bet_this_hand
         
-        action, raise_amount = self._validate_and_convert_action(action)
-        action_type = self.game_state.execute_action(action, raise_amount)
+        # Store pre-action state for tracking
+        stack_before = current_player.stack + current_player.total_bet_this_hand
+        pot_before = self.game_state.pot_manager.get_pot_total()
+        street_before = self._betting_round_to_street(self.game_state.betting_round)
+        position = self.game_state.current_player_idx
         
+        action_int, raise_amount = self._validate_and_convert_action(action)
+        action_type_str = self.game_state.execute_action(action_int, raise_amount)
+        
+        # Record action with opponent tracker
+        action_enum = self._string_to_action_enum(action_type_str)
+        action_amount = self._calculate_action_amount(current_player, action_int, raise_amount)
+        
+        self.opponent_tracker.record_action(
+            player_id=current_player.player_id,
+            player_name=current_player.name,
+            action=action_enum,
+            amount=action_amount,
+            pot_size=pot_before,
+            stack_before=stack_before,
+            stack_after=current_player.stack,
+            street=street_before,
+            position=position
+        )
+
         if self.game_state.is_betting_round_complete():
             if not self.game_state.is_hand_complete():
                 self.game_state.advance_betting_round()
         
         done = self.game_state.is_hand_complete()
         reward = 0.0
-        info = {'action': action_type, 'raise_bins': self.raise_bins}
+        info = {'action': action_type_str, 'raise_bins': self.raise_bins}
         
         # Track timesteps and reset stacks when limit hit
         self.timesteps_since_reset += 1
@@ -127,18 +178,24 @@ class TexasHoldemEnv(gym.Env):
         
         if self.reset_stacks_every_n_timesteps is not None:
             if self.timesteps_since_reset >= self.reset_stacks_every_n_timesteps:
-                # Reset ALL stacks here
                 for player in self.game_state.players:
-                    if player.stack <= 0:
-                        player.stack = self.starting_stack
-                    else:
-                        player.stack = self.starting_stack  # Reset everyone
-                
+                    player.stack = self.starting_stack
                 self.timesteps_since_reset = 0
                 print(f"[RESET] Timestep {self.total_timesteps}")
+        
         if done:
             winnings = self.game_state.determine_winners()
-            reward = (current_player.stack - starting_stack) / starting_stack
+            reward = (current_player.stack - starting_stack) / self.game_state.big_blind
+            final_stacks = {p.player_id: p.stack for p in self.game_state.players}
+            
+            # End hand tracking
+            winner_ids = [pid for pid, amt in winnings.items() if amt > 0]
+            self.opponent_tracker.end_hand(
+                winners=winner_ids,
+                winnings=winnings,
+                final_stacks=final_stacks
+            )
+            
             info['winnings'] = winnings
             info['hand_complete'] = True
         
@@ -146,9 +203,44 @@ class TexasHoldemEnv(gym.Env):
         truncated = False
         return self._get_observation(), reward, terminated, truncated, info
     
+    def _calculate_player_positions(self):
+        """Record player positions (0=dealer, 1=SB, 2=BB, etc)"""
+        positions = {}
+        for i, player in enumerate(self.game_state.players):
+            positions[player.player_id] = i
+        self.opponent_tracker.record_positions(positions)
+    
+    def _betting_round_to_street(self, betting_round: BettingRound) -> Street:
+        """Convert BettingRound enum to Street enum"""
+        mapping = {
+            BettingRound.PREFLOP: Street.PREFLOP,
+            BettingRound.FLOP: Street.FLOP,
+            BettingRound.TURN: Street.TURN,
+            BettingRound.RIVER: Street.RIVER,
+            BettingRound.SHOWDOWN: Street.RIVER,
+        }
+        return mapping.get(betting_round, Street.PREFLOP)
+    
+    def _string_to_action_enum(self, action_str: str) -> Action:
+        """Convert action string to Action enum"""
+        action_str_lower = action_str.lower()
+        if 'fold' in action_str_lower:
+            return Action.FOLD
+        elif 'check' in action_str_lower:
+            return Action.CHECK
+        elif 'call' in action_str_lower:
+            return Action.CALL
+        elif 'all' in action_str_lower or 'all-in' in action_str_lower:
+            return Action.ALL_IN
+        elif 'raise' in action_str_lower:
+            return Action.RAISE
+        elif 'bet' in action_str_lower:
+            return Action.BET
+        else:
+            return Action.CHECK
+
     def _validate_and_convert_action(self, action: int) -> Tuple[int, Optional[int]]:
         """Convert raw action to (action_type, raise_amount)"""
-        #print(f"In validate_and_convert")
         if action == 0:
             return 0, None
         elif action == 1:
@@ -157,11 +249,8 @@ class TexasHoldemEnv(gym.Env):
             # Check if this is all-in action
             last_action_idx = 2 + len(self.raise_bins)
             if self.include_all_in and action == last_action_idx:
-                # All-in action
                 player = self.game_state.get_current_player()
-                #print(player.stack)
-                # to_call = self.game_state.pot_manager.current_bet - player.current_bet
-                return 2, player.stack # Raise by entire stack
+                return 2, player.stack
             
             # Otherwise it's a raise bin action
             bin_idx = action - 2
@@ -170,13 +259,10 @@ class TexasHoldemEnv(gym.Env):
             
             player = self.game_state.get_current_player()
             pot = self.game_state.pot_manager.get_pot_total()
-            #print(f"Pot Size {pot}")
             to_call = self.game_state.pot_manager.current_bet - player.current_bet
-            #print(f"To Call: {to_call}")
             
             raise_chips = int(pot * self.raise_bins[bin_idx])
             raise_chips = self.game_state.pot_manager._round_to_big_blind(raise_chips)
-            #print(f"Raise Chips {raise_chips}")
             if raise_chips < self.game_state.pot_manager.min_raise:
                 raise_chips = self.game_state.pot_manager.min_raise
             
@@ -188,6 +274,17 @@ class TexasHoldemEnv(gym.Env):
             
             return 2, to_call + raise_chips
     
+    def _calculate_action_amount(self, current_player, action_type: int, raise_amount: Optional[int]) -> int:
+        """Calculate actual amount contributed in this action"""
+        to_call = self.game_state.pot_manager.current_bet - current_player.current_bet
+        
+        if action_type == 0:  # Fold
+            return 0
+        elif action_type == 1:  # Call/Check
+            return to_call
+        else:  # Raise (action_type == 2)
+            return raise_amount if raise_amount else 0
+
     def get_valid_actions(self) -> List[int]:
         """Get valid actions for current player"""
         player = self.game_state.get_current_player()
@@ -226,10 +323,8 @@ class TexasHoldemEnv(gym.Env):
                 return f"Raise {self.raise_bins[idx]*100:.0f}% pot"
         return f"Action {action}"
     
-    def step_with_raise(self, action: int, raise_amount: Optional[int] = None) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
+    def step_with_raise(self, action: int, raise_amount: Optional[int] = None) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute action with custom raise amount (for humans)"""
-        #print("In step_with_raise")
-        #print(f"raise amount: {raise_amount}")
         current_player = self.game_state.get_current_player()
         starting_stack = current_player.stack + current_player.total_bet_this_hand
         
@@ -254,9 +349,10 @@ class TexasHoldemEnv(gym.Env):
         return self._get_observation(), reward, terminated, truncated, info
     
     def _get_observation(self) -> np.ndarray:
-        """Get observation vector"""
+        """Get observation vector (32 base + 36 opponent stats if tracking)"""
         player = self.game_state.get_current_player()
         
+        # Base observation (32 dims)
         hole = self._encode_cards(player.hand)
         comm = self._encode_cards(
             self.game_state.community_cards + [0]*(5-len(self.game_state.community_cards))
@@ -272,7 +368,27 @@ class TexasHoldemEnv(gym.Env):
         rnd = self.game_state.betting_round.value / 4
         btn = self.game_state.button_position / self.num_players
         
-        return np.concatenate([hole, comm, [stack, pot, bet, call], [active, pos, rnd, btn]]).astype(np.float32)
+        base_obs = np.concatenate([hole, comm, [stack, pot, bet, call], [active, pos, rnd, btn]]).astype(np.float32)
+        
+        # Add opponent stats if tracking enabled
+        if self.track_opponents:
+            opponent_features = self._get_opponent_features(player.player_id)
+            return np.concatenate([base_obs, opponent_features])
+        
+        return base_obs
+    
+    def _get_opponent_features(self, hero_id: int) -> np.ndarray:
+        """Get opponent stats for observation space (36 dims: 9 opponents × 4 features)"""
+        opponent_ids = [p.player_id for p in self.game_state.players if p.player_id != hero_id]
+        
+        features = self.opponent_tracker.get_observation_features(
+            hero_id=hero_id,
+            opponent_ids=opponent_ids,
+            max_opponents=self.MAX_OPPONENTS,
+            features_per_opponent=self.FEATURES_PER_OPPONENT
+        )
+        
+        return np.array(features, dtype=np.float32)
     
     def _encode_cards(self, cards: list) -> np.ndarray:
         """Encode cards"""
@@ -317,6 +433,15 @@ class TexasHoldemEnv(gym.Env):
             
             cards = " ".join([HandEvaluator.card_to_string(c) for c in p.hand]) if i == self.current_agent and p.hand else ("## ##" if p.is_active else "-- --")
             print(f"{mk}{bn}{p.name}: ${p.stack} (Bet: ${p.current_bet}) [{cards}]{st}")
+        
+        # Show opponent stats if available
+        if self.track_opponents:
+            stats = self.opponent_tracker.get_all_opponent_stats()
+            if any(s.get('hands_played', 0) > 0 for s in stats.values() if s):
+                print("\n📊 Opponent Stats:")
+                for pid, s in stats.items():
+                    if s and s.get('hands_played', 0) > 0:
+                        print(f"  P{pid}: VPIP={s['vpip']:.1%} PFR={s['pfr']:.1%} AF={s['af']:.2f}")
         
         print("="*60 + "\n")
     
