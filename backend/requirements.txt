@@ -1,0 +1,23 @@
+# FastAPI dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+websockets==12.0
+pydantic==2.5.0
+python-multipart==0.0.6
+
+# Core RL libraries (needed by LagBot poker engine)
+gymnasium>=0.29.0
+stable-baselines3>=2.3.0
+torch==2.1.0
+
+# Poker hand evaluation
+treys==0.1.8
+
+# Utilities
+numpy==1.24.3
+
+# Configuration management
+pyyaml==6.0.1
+
+# Type hints
+typing-extensions==4.8.0
