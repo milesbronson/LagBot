@@ -77,26 +77,39 @@ class OpponentAutoPlayWrapper:
         
         # Step 1: Learning agent acts
         obs, reward, terminated, truncated, info = self.env.step(action)
-        
+
+        # CRITICAL FIX: Always get reward for player 0 when hand ends
+        if terminated or truncated:
+            learning_agent = self.env.game_state.players[0]
+            agent_starting_stack = learning_agent.starting_stack_this_hand
+            reward = (learning_agent.stack - agent_starting_stack) / self.env.game_state.big_blind
+
         # Step 2: Automatically play all opponents until main agent's turn or hand ends
         while not (terminated or truncated) and self.env.game_state.current_player_idx != 0:
 
             # Get current player index (should be 1 or 2)
             current_idx = self.env.game_state.current_player_idx
             opponent_idx = current_idx - 1  # opponent index in self.opponents list
-            
+
             # Safety check
             if opponent_idx < len(self.opponents):
                 opponent_type, opponent = self.opponents[opponent_idx]
-                
+
                 # ← OPPONENTS GET 68-DIM OBSERVATION WITH OPPONENT STATS
                 opponent_action = opponent.select_action(obs)
-                
+
                 # ← OPPONENT AFFECTS ENVIRONMENT (chips move, stats recorded, etc.)
-                obs, _, terminated, truncated, info = self.env.step(opponent_action)
+                obs, opp_reward, terminated, truncated, info = self.env.step(opponent_action)
+
+                # CRITICAL FIX: If hand ended during opponent's turn, get learning agent's reward
+                if terminated or truncated:
+                    # Hand ended - calculate reward for learning agent (player 0)
+                    learning_agent = self.env.game_state.players[0]
+                    agent_starting_stack = learning_agent.starting_stack_this_hand
+                    reward = (learning_agent.stack - agent_starting_stack) / self.env.game_state.big_blind
             else:
                 break
-        
+
         return obs, reward, terminated, truncated, info
     
     def render(self, *args, **kwargs):

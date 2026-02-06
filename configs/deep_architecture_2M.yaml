@@ -1,0 +1,54 @@
+# Deeper architecture with 4 layers each
+# More capacity but slower training
+
+environment:
+  num_players: 3
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+
+training:
+  total_timesteps: 2000000
+  learning_rate: 0.0003
+  n_steps: 3000
+  batch_size: 256  # Larger batches for stability
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.03  # Moderate entropy
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+  # Deeper Architecture (4 layers)
+  policy_kwargs:
+    net_arch:
+      pi: [512, 256, 256, 128]  # 4 deep layers for actor
+      vf: [512, 256, 256, 128]  # 4 deep layers for critic
+
+# PPO settings
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+# Self-play settings
+self_play:
+  opponent_pool_size: 5
+  update_frequency: 10000
+
+# Evaluation settings
+evaluation:
+  eval_frequency: 10000
+  n_eval_episodes: 100
+
+# Logging
+logging:
+  log_dir: "./logs/"
+  save_frequency: 50000
+  model_dir: "./models/"

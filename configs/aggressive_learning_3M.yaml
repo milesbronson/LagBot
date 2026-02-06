@@ -1,0 +1,52 @@
+# AGGRESSIVE LEARNING - Force stronger updates
+# Higher learning rate, more epochs, lower entropy
+
+environment:
+  num_players: 3
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+
+training:
+  total_timesteps: 3000000
+  learning_rate: 0.001  # 3x higher - faster learning
+  n_steps: 2048         # Smaller rollout buffer
+  batch_size: 256
+  n_epochs: 20          # 4x more epochs - learn more from each batch
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.3       # Wider clip range - allow bigger updates
+  ent_coef: 0.005       # Very low entropy - exploit hard
+  vf_coef: 1.0          # Strong value function learning
+  max_grad_norm: 1.0    # Allow larger gradients
+
+  # Shared architecture for better learning
+  policy_kwargs:
+    net_arch: [256, 256, 128]  # Moderate size, shared layers
+
+# PPO settings
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+# Self-play settings
+self_play:
+  opponent_pool_size: 5
+  update_frequency: 10000
+
+# Evaluation settings
+evaluation:
+  eval_frequency: 10000
+  n_eval_episodes: 100
+
+# Logging
+logging:
+  log_dir: "./logs/"
+  save_frequency: 50000
+  model_dir: "./models/"
