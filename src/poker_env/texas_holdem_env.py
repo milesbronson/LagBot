@@ -92,7 +92,7 @@ class TexasHoldemEnv(gym.Env):
             low=0, high=np.inf, shape=(obs_size,), dtype=np.float32
         )
         
-        self.current_agent = 0
+        self.learning_agent_id = 0
         self.opponent_tracker = OpponentTracker(max_history_hands=1000)
         self.player_positions = {}
     
@@ -185,7 +185,11 @@ class TexasHoldemEnv(gym.Env):
         
         if done:
             winnings = self.game_state.determine_winners()
-            reward = (current_player.stack - starting_stack) / self.game_state.big_blind
+            # CRITICAL FIX: Always calculate reward for the agent being trained (player 0)
+            # not for whoever's turn it was when the hand ended
+            learning_agent = self.game_state.players[self.learning_agent_id]
+            agent_starting_stack = learning_agent.starting_stack_this_hand
+            reward = (learning_agent.stack - agent_starting_stack) / self.game_state.big_blind
             final_stacks = {p.player_id: p.stack for p in self.game_state.players}
             
             # End hand tracking
@@ -350,20 +354,23 @@ class TexasHoldemEnv(gym.Env):
         """Execute action with custom raise amount (for humans)"""
         current_player = self.game_state.get_current_player()
         starting_stack = current_player.stack + current_player.total_bet_this_hand
-        
+
         action_type = self.game_state.execute_action(action, raise_amount)
-        
+
         if self.game_state.is_betting_round_complete():
             if not self.game_state.is_hand_complete():
                 self.game_state.advance_betting_round()
-        
+
         done = self.game_state.is_hand_complete()
         reward = 0.0
         info = {'action': action_type}
-        
+
         if done:
             winnings = self.game_state.determine_winners()
-            reward = float(current_player.stack - starting_stack)
+            # FIX: Calculate reward for the agent being trained (player 0)
+            learning_agent = self.game_state.players[self.learning_agent_id]
+            agent_starting_stack = learning_agent.starting_stack_this_hand
+            reward = float(learning_agent.stack - agent_starting_stack)
             info['winnings'] = winnings
             info['hand_complete'] = True
         
@@ -454,7 +461,7 @@ class TexasHoldemEnv(gym.Env):
             elif p.is_all_in:
                 st = " [ALL-IN]"
             
-            cards = " ".join([HandEvaluator.card_to_string(c) for c in p.hand]) if i == self.current_agent and p.hand else ("## ##" if p.is_active else "-- --")
+            cards = " ".join([HandEvaluator.card_to_string(c) for c in p.hand]) if i == self.learning_agent_id and p.hand else ("## ##" if p.is_active else "-- --")
             print(f"{mk}{bn}{p.name}: ${p.stack} (Bet: ${p.current_bet}) [{cards}]{st}")
         
         # Show opponent stats if available
