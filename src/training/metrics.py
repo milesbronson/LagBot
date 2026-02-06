@@ -68,8 +68,8 @@ class TrainingMetrics:
         
         if episode_rewards:
             self.metrics['rewards'].append(float(np.mean(episode_rewards)))
-            last_100 = episode_rewards[-100:] if len(episode_rewards) >= 100 else episode_rewards
-            self.metrics['avg_reward_100'].append(float(np.mean(last_100)))
+            last_10 = episode_rewards[-10:] if len(episode_rewards) >= 10 else episode_rewards
+            self.metrics['avg_reward_100'].append(float(np.mean(last_10)))
         
         if agent_stats:
             self.metrics['win_rate'].append(agent_stats.get('win_rate', 0))

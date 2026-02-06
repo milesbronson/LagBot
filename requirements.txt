@@ -1,7 +1,9 @@
 # Core RL libraries
 gymnasium>=0.29.0
 stable-baselines3>=2.3.0
-torch==2.1.0
+# PyTorch with MPS (Metal Performance Shaders) support for Apple Silicon
+# For best performance on M1/M2/M3/M4 Macs, use PyTorch 2.0+
+torch>=2.1.0
 tensorboard==2.15.1
 
 # Poker hand evaluation

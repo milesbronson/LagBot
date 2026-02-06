@@ -1,8 +1,9 @@
 """
-PPO agent using Stable Baselines3
+PPO agent using Stable Baselines3 with GPU support (CUDA or MPS)
 """
 
 import numpy as np
+import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from src.agents.base_agent import BaseAgent
@@ -10,11 +11,11 @@ from src.agents.base_agent import BaseAgent
 
 class PPOAgent(BaseAgent):
     """
-    PPO-based poker agent using Stable Baselines3
+    PPO-based poker agent using Stable Baselines3 with GPU acceleration
     """
-    
+
     def __init__(
-        self, 
+        self,
         env,
         name: str = "PPOAgent",
         learning_rate: float = 0.0003,
@@ -25,11 +26,12 @@ class PPOAgent(BaseAgent):
         gae_lambda: float = 0.95,
         clip_range: float = 0.2,
         tensorboard_log: str = "./logs/",
+        device: str = "auto",
         **kwargs
     ):
         """
         Initialize PPO agent
-        
+
         Args:
             env: Gym environment
             name: Agent name
@@ -41,10 +43,25 @@ class PPOAgent(BaseAgent):
             gae_lambda: GAE lambda parameter
             clip_range: Clipping parameter
             tensorboard_log: Tensorboard log directory
+            device: Device to use ('auto', 'cpu', 'cuda', 'mps')
             **kwargs: Additional PPO parameters
         """
         super().__init__(name)
-        
+
+        # Auto-detect best available device
+        if device == "auto":
+            if torch.cuda.is_available():
+                device = "cuda"
+                print(f"🚀 Using CUDA GPU: {torch.cuda.get_device_name(0)}")
+            elif torch.backends.mps.is_available():
+                device = "mps"
+                print(f"🚀 Using Apple Metal (MPS) GPU acceleration")
+            else:
+                device = "cpu"
+                print("⚠️  Using CPU (no GPU detected)")
+
+        self.device = device
+
         self.model = PPO(
             "MlpPolicy",
             env,
@@ -56,6 +73,7 @@ class PPOAgent(BaseAgent):
             gae_lambda=gae_lambda,
             clip_range=clip_range,
             tensorboard_log=tensorboard_log,
+            device=device,
             verbose=1,
             **kwargs
         )

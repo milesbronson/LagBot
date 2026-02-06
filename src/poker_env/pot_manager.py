@@ -102,28 +102,39 @@ class PotManager:
     def place_bet(self, player: Player, amount: int) -> Tuple[int, str]:
         """
         Place a bet for a player.
-        
-        FIX: Properly updates current_bet for raises, but NOT for calls/all-ins that 
+
+        FIX: Properly updates current_bet for raises, but NOT for calls/all-ins that
         just match or go short of the to_call amount.
+
+        FIX: Allow players to go all-in even if they have insufficient chips to call.
         """
         #print("In Place_bet function")
         # Check if this is a check
         if amount == 0 and self.current_bet == player.current_bet:
             return 0, "check"
-        
+
         to_call = self.current_bet - player.current_bet
-        
-        # Fold if amount is less than required call
+
+        # CRITICAL FIX: Allow all-in with insufficient chips
+        # If player is trying to bet their entire stack, allow it even if less than to_call
+        if amount >= player.stack and player.stack > 0 and player.stack < to_call:
+            # Player is going all-in with insufficient chips to call
+            actual_bet = player.bet(player.stack)
+            self.pots[0].add_chips(actual_bet)
+            # Don't update current_bet (they couldn't match it)
+            return actual_bet, "all-in"
+
+        # Fold if amount is less than required call (and not going all-in)
         if amount < to_call:
             player.fold()
             return 0, "fold"
-        
+
         # Place the bet
         #print(f"Bet amount: {amount}")
         actual_bet = player.bet(amount)
         #print(f"Actual amount {actual_bet}")
         self.pots[0].add_chips(actual_bet)
-        
+
         # Determine action and update current_bet ONLY for raises
         if actual_bet > to_call:
             # This is a raise - update current_bet
@@ -135,7 +146,7 @@ class PotManager:
         else:
             # This is a call (actual_bet == to_call) - don't update current_bet
             action = "all-in" if player.is_all_in else "call"
-        
+
         return actual_bet, action
     
     def start_new_betting_round(self, players: List[Player]):

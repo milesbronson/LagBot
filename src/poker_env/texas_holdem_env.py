@@ -29,7 +29,7 @@ class TexasHoldemEnv(gym.Env):
     
     # Opponent tracking constants
     MAX_OPPONENTS = 9
-    FEATURES_PER_OPPONENT = 4  # VPIP, PFR, AF, confidence
+    FEATURES_PER_OPPONENT = 8  # VPIP, PFR, AF, 3bet%, cbet%, fold_to_cbet%, showdown%, confidence
     
     def __init__(
         self,
@@ -83,10 +83,10 @@ class TexasHoldemEnv(gym.Env):
         num_all_in = 1 if include_all_in else 0
         self.action_space = spaces.Discrete(2 + num_raise_actions + num_all_in)
         
-        # Observation space: base (32) + opponent stats (36 if tracking)
-        base_obs_size = 7 * 4 + 4 + 4  # 32
-        opponent_obs_size = self.MAX_OPPONENTS * self.FEATURES_PER_OPPONENT if track_opponents else 0
-        obs_size = base_obs_size + opponent_obs_size
+        # Observation space: base (36) + opponent stats (72 if tracking, was 36)
+        base_obs_size = 7 * 4 + 4 + 4  # 36 (7 cards × 4 features + 8 game state)
+        opponent_obs_size = self.MAX_OPPONENTS * self.FEATURES_PER_OPPONENT if track_opponents else 0  # 9 × 8 = 72
+        obs_size = base_obs_size + opponent_obs_size  # 36 + 72 = 108 total
         
         self.observation_space = spaces.Box(
             low=0, high=np.inf, shape=(obs_size,), dtype=np.float32
@@ -240,7 +240,13 @@ class TexasHoldemEnv(gym.Env):
             return Action.CHECK
 
     def _validate_and_convert_action(self, action: int) -> Tuple[int, Optional[int]]:
-        """Convert raw action to (action_type, raise_amount)"""
+        """Convert raw action to (action_type, raise_amount)
+
+        Returns:
+            (action_type, total_bet_amount) where:
+            - action_type: 0=fold, 1=call, 2=raise
+            - total_bet_amount: for raises, the TOTAL amount to bet (to_call + raise_chips)
+        """
         if action == 0:
             return 0, None
         elif action == 1:
@@ -251,60 +257,77 @@ class TexasHoldemEnv(gym.Env):
             if self.include_all_in and action == last_action_idx:
                 player = self.game_state.get_current_player()
                 return 2, player.stack
-            
+
             # Otherwise it's a raise bin action
             bin_idx = action - 2
             if bin_idx >= len(self.raise_bins):
                 return 1, None  # Invalid, default to call
-            
+
             player = self.game_state.get_current_player()
             pot = self.game_state.pot_manager.get_pot_total()
             to_call = self.game_state.pot_manager.current_bet - player.current_bet
-            
+
+            # Calculate raise amount (just the raise portion, not including to_call)
             raise_chips = int(pot * self.raise_bins[bin_idx])
             raise_chips = self.game_state.pot_manager._round_to_big_blind(raise_chips)
             if raise_chips < self.game_state.pot_manager.min_raise:
                 raise_chips = self.game_state.pot_manager.min_raise
-            
-            if raise_chips > player.stack:
+
+            # BUG FIX: Check if player has enough for to_call + raise_chips
+            total_needed = to_call + raise_chips
+
+            if total_needed > player.stack:
+                # Player doesn't have enough for this raise size
                 if player.stack > to_call:
-                    raise_chips = player.stack
+                    # Player can go all-in (which is more than a call)
+                    return 2, player.stack
                 else:
+                    # Player can only afford to call
                     return 1, None
-            
-            return 2, to_call + raise_chips
+
+            return 2, total_needed
     
     def _calculate_action_amount(self, current_player, action_type: int, raise_amount: Optional[int]) -> int:
-        """Calculate actual amount contributed in this action"""
+        """Calculate actual amount contributed in this action
+
+        NOTE: This is called BEFORE the action is executed, so we estimate the amount.
+        For raises, raise_amount is the TOTAL bet amount (to_call + raise_chips).
+        """
         to_call = self.game_state.pot_manager.current_bet - current_player.current_bet
-        
+
         if action_type == 0:  # Fold
             return 0
         elif action_type == 1:  # Call/Check
             return to_call
         else:  # Raise (action_type == 2)
-            return raise_amount if raise_amount else 0
+            # raise_amount is the total bet amount, limited by stack
+            if raise_amount is None:
+                return self.game_state.pot_manager.min_raise
+            # Return the actual chips that will go into pot (capped by player stack)
+            return min(raise_amount, current_player.stack)
 
     def get_valid_actions(self) -> List[int]:
         """Get valid actions for current player"""
         player = self.game_state.get_current_player()
         pot = self.game_state.pot_manager.get_pot_total()
         to_call = self.game_state.pot_manager.current_bet - player.current_bet
-        
+
         valid = [0, 1]
-        
+
         for i, bin_pct in enumerate(self.raise_bins):
             raise_amt = int(pot * bin_pct)
             raise_amt = self.game_state.pot_manager._round_to_big_blind(raise_amt)
-            
-            if to_call + raise_amt <= player.stack + to_call:
+
+            # Check if player has enough chips for to_call + raise_amt
+            # BUG FIX: Was "to_call + raise_amt <= player.stack + to_call" which is wrong
+            if to_call + raise_amt <= player.stack:
                 valid.append(2 + i)
-        
+
         # Add all-in if available and player has chips
         if self.include_all_in and player.stack > 0:
             all_in_idx = 2 + len(self.raise_bins)
             valid.append(all_in_idx)
-        
+
         return valid
     
     def get_action_description(self, action: int) -> str:

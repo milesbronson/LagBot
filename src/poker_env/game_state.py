@@ -398,10 +398,13 @@ class GameState:
             self.deck.pop()
     
     def execute_action(self, action: int, raise_amount: Optional[int] = None) -> str:
-        """Execute a player action and record in history"""
-        #print(f"In execute_action() {action}")
+        """Execute a player action and record in history
+
+        NOTE: For action == 2 (raise), raise_amount from the environment is the TOTAL
+        bet amount (to_call + raise_chips), not just the raise portion.
+        """
         player = self.get_current_player()
-        
+
         if action == 0:
             player.fold()
             action_type = "fold"
@@ -412,11 +415,11 @@ class GameState:
                 'fold',
                 pot_size=self.pot_manager.get_pot_total()
             )
-            
+
         elif action == 1:
             to_call = self.pot_manager.current_bet - player.current_bet
             _, action_type = self.pot_manager.place_bet(player, to_call)
-            
+
             if action_type == "check":
                 self.hand_history.record_action(
                     self.betting_round.name,
@@ -434,37 +437,43 @@ class GameState:
                     amount=to_call,
                     pot_size=self.pot_manager.get_pot_total()
                 )
-            
+
         elif action == 2:
-            if raise_amount is None:
-                raise_amount = self.pot_manager.min_raise
-            #print(f"Raise amount {raise_amount}")
             to_call = self.pot_manager.current_bet - player.current_bet
-            #print(f"To call {to_call}")
-            total_bet = to_call + raise_amount
-            #print(f"Total Bet {total_bet}")
-            _, action_type = self.pot_manager.place_bet(player, raise_amount)
-            
+
+            # Handle default case when raise_amount is None
+            if raise_amount is None:
+                # Default to minimum raise (just the raise portion)
+                raise_amount = self.pot_manager.min_raise
+                total_bet_amount = to_call + raise_amount
+            else:
+                # raise_amount from environment is already TOTAL bet (to_call + raise_chips)
+                total_bet_amount = raise_amount
+
+            # Place bet with the total amount
+            _, action_type = self.pot_manager.place_bet(player, total_bet_amount)
+
+            # Calculate just the raise portion for history recording
+            raise_portion = total_bet_amount - to_call
+
             if action_type == "raise":
-                #print("Just raising")
                 self.hand_history.record_action(
                     self.betting_round.name,
                     player.player_id,
                     player.name,
                     'raise',
-                    amount=raise_amount,
+                    amount=raise_portion,
                     total_bet=player.current_bet,
                     pot_size=self.pot_manager.get_pot_total()
                 )
                 self.last_aggressor_idx = self.current_player_idx
             elif action_type == "all-in":
-                #print("Going all in")
                 self.hand_history.record_action(
                     self.betting_round.name,
                     player.player_id,
                     player.name,
                     'all-in',
-                    amount=total_bet,
+                    amount=total_bet_amount,
                     pot_size=self.pot_manager.get_pot_total()
                 )
         

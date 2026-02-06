@@ -150,37 +150,41 @@ class OpponentProfile:
     def recalculate_metrics(self):
         """Recalculate all derived percentages from raw counts"""
         # VPIP and PFR stay as calculated elsewhere
-        
+
         # WTSD: Went To Showdown %
         self.wtsd_percent = self.went_to_showdown / max(self.hands_played, 1)
-        
+        self.went_to_showdown_percent = self.wtsd_percent  # Alias for observation features
+
         # W$SD: Won Money At Showdown
         if self.went_to_showdown > 0:
             self.win_at_showdown_percent = self.showdown_wins / self.went_to_showdown
-        
+
         # WWSF: Won When Saw Flop
         if self.saw_flop_count > 0:
             self.wwsf_percent = self.won_when_saw_flop / self.saw_flop_count
-        
+
         # 3-Bet Frequency
         if self.three_bet_opportunities > 0:
             self.three_bet_frequency = self.three_bet_count / self.three_bet_opportunities
-        
+            self.three_bet_percent = self.three_bet_frequency  # Alias for observation features
+
         # Fold to 3-Bet After Raising
         if self.faced_3bet_after_raise > 0:
             self.fold_to_3bet_after_raise_percent = self.folded_to_3bet_after_raise / self.faced_3bet_after_raise
-        
+
         # Squeeze %
         if self.squeeze_opportunities > 0:
             self.squeeze_percent = self.squeeze_attempts / self.squeeze_opportunities
-        
+
         # Flop C-Bet %
         if self.flop_cbet_opportunities > 0:
             self.flop_cbet_percent = self.flop_cbet_made / self.flop_cbet_opportunities
-        
+            self.cbet_percent = self.flop_cbet_percent  # Alias for observation features
+
         # Fold to Flop C-Bet %
         if self.faced_flop_cbet > 0:
             self.fold_to_flop_cbet_percent = self.folded_to_flop_cbet / self.faced_flop_cbet
+            self.fold_to_cbet_percent = self.fold_to_flop_cbet_percent  # Alias for observation features
     
     def get_player_type(self) -> str:
         """Classify opponent based on stats"""
@@ -573,48 +577,53 @@ class OpponentTracker:
                 features[opponent_id] = self.get_opponent_features(opponent_id, num_seats)
         return features
     
-    def get_observation_features(self, hero_id: int, opponent_ids: List[int], 
-                              max_opponents: int = 9, features_per_opponent: int = 4) -> List[float]:
+    def get_observation_features(self, hero_id: int, opponent_ids: List[int],
+                              max_opponents: int = 9, features_per_opponent: int = 8) -> List[float]:
         """
         Get fixed-size opponent features for RL observation space.
-        
+
+        EXPANDED FEATURES: Now includes 8 features per opponent (was 4)
+
         Handles variable player counts by zero-padding missing opponent slots.
         This ensures a consistent observation space size regardless of:
         - Table size (2-10 players)
         - Number of opponents who have folded
         - Players who joined/left
-        
+
         Args:
             hero_id: The learning agent's player ID (excluded from features)
             opponent_ids: List of opponent player IDs in seat order
             max_opponents: Maximum opponents to encode (default 9 for 10-player max)
-            features_per_opponent: Features per opponent (default 4: VPIP, PFR, AF, confidence)
-        
+            features_per_opponent: Features per opponent (now 8: VPIP, PFR, AF, 3bet, cbet, fold_to_cbet, showdown, confidence)
+
         Returns:
-            List of floats with length = max_opponents * features_per_opponent (36 by default)
-            
-        Feature layout per opponent slot:
+            List of floats with length = max_opponents * features_per_opponent (72 by default)
+
+        Feature layout per opponent slot (8 features):
             [0] VPIP (0-1): Voluntarily put money in pot %
             [1] PFR (0-1): Preflop raise %
             [2] AF (0-1): Aggression factor / 3.0 (normalized, capped at 1.0)
-            [3] Confidence (0-1): min(hands_played / 100, 1.0)
-        
+            [3] 3-Bet % (0-1): Frequency of 3-betting when facing a raise
+            [4] C-Bet % (0-1): Continuation bet frequency on flop
+            [5] Fold to C-Bet % (0-1): Frequency of folding to continuation bets
+            [6] Went to Showdown % (0-1): How often they go to showdown
+            [7] Confidence (0-1): min(hands_played / 100, 1.0)
+
         Padding explanation:
             With variable players (2-10), observation must be fixed size for PPO.
             Solution: Always allocate 9 opponent slots (max opponents at 10-player table).
-            
+
             Example with 3 players (hero + 2 opponents):
-            [vpip1, pfr1, af1, conf1,   # Opponent 1 - real data
-            vpip2, pfr2, af2, conf2,   # Opponent 2 - real data
-            0.0, 0.0, 0.0, 0.0,        # Slot 3 - zero-padded
-            0.0, 0.0, 0.0, 0.0,        # Slot 4 - zero-padded
-            ...                         # Slots 5-9 - zero-padded
+            [vpip1, pfr1, af1, 3bet1, cbet1, ftcb1, wtsd1, conf1,  # Opponent 1
+            vpip2, pfr2, af2, 3bet2, cbet2, ftcb2, wtsd2, conf2,  # Opponent 2
+            0, 0, 0, 0, 0, 0, 0, 0,                                # Slot 3 - padded
+            ...                                                     # Slots 4-9 - padded
             ]
-            
+
             The neural network learns that zeros indicate "no opponent in this slot".
         """
         features = []
-        
+
         for i in range(max_opponents):
             if i < len(opponent_ids):
                 pid = opponent_ids[i]
@@ -624,16 +633,20 @@ class OpponentTracker:
                         min(opp.vpip, 1.0),
                         min(opp.pfr, 1.0),
                         min(opp.af / 3.0, 1.0),  # Normalize AF (typical range 0-3)
+                        min(opp.three_bet_percent, 1.0),
+                        min(opp.cbet_percent, 1.0),
+                        min(opp.fold_to_cbet_percent, 1.0),
+                        min(opp.went_to_showdown_percent, 1.0),
                         opp.confidence
                     ])
                 else:
                     # Opponent in game but not yet tracked (new player)
-                    # Use neutral defaults
-                    features.extend([0.0, 0.0, 0.33, 0.0])
+                    # Use neutral defaults (middle values for unknown tendencies)
+                    features.extend([0.3, 0.2, 0.33, 0.1, 0.5, 0.5, 0.2, 0.0])
             else:
                 # Zero-pad empty opponent slots
                 features.extend([0.0] * features_per_opponent)
-        
+
         return features
     
     def get_opponent_stats(self, opponent_id: int) -> Optional[Dict]:

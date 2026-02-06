@@ -79,10 +79,10 @@ class OpponentAutoPlayWrapper:
         obs, reward, terminated, truncated, info = self.env.step(action)
         
         # Step 2: Automatically play all opponents until main agent's turn or hand ends
-        while not (terminated or truncated) and self.env.game_state.get_current_player_index() != 0:
-            
+        while not (terminated or truncated) and self.env.game_state.current_player_idx != 0:
+
             # Get current player index (should be 1 or 2)
-            current_idx = self.env.game_state.get_current_player_index()
+            current_idx = self.env.game_state.current_player_idx
             opponent_idx = current_idx - 1  # opponent index in self.opponents list
             
             # Safety check
@@ -301,7 +301,10 @@ def train(config_path: str, run_name: str = None):
     # =========================================================================
     # AGENT CREATION
     # =========================================================================
-    
+
+    # Get policy_kwargs if specified in config
+    policy_kwargs = training_config.get('policy_kwargs', None)
+
     agent = PPOAgent(
         env=env,
         name=f"PPO_{run_name}",
@@ -312,12 +315,18 @@ def train(config_path: str, run_name: str = None):
         gamma=training_config['gamma'],
         gae_lambda=training_config['gae_lambda'],
         clip_range=training_config['clip_range'],
-        tensorboard_log=log_dir
+        ent_coef=training_config.get('ent_coef', 0.01),  # Entropy bonus for exploration
+        vf_coef=training_config.get('vf_coef', 0.5),     # Value function coefficient
+        max_grad_norm=training_config.get('max_grad_norm', 0.5),  # Gradient clipping
+        tensorboard_log=log_dir,
+        policy_kwargs=policy_kwargs  # Pass custom architecture if specified
     )
     
     print(f"Agent: {agent.name}")
     print(f"Learning rate: {training_config['learning_rate']}")
     print(f"Total timesteps: {training_config['total_timesteps']:,}")
+    if policy_kwargs:
+        print(f"Architecture: {policy_kwargs}")
     print()
     
     # =========================================================================
