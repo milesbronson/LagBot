@@ -1,0 +1,53 @@
+# Force opponent awareness with auxiliary opponent prediction loss
+# Network must predict opponent actions, forcing it to use opponent features
+
+environment:
+  num_players: 3
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+
+training:
+  total_timesteps: 3000000
+  learning_rate: 0.0005  # Slightly higher for faster learning
+  n_steps: 2048
+  batch_size: 256
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+  # Shared layers with attention to opponent features
+  policy_kwargs:
+    net_arch: [256, 256, 128]  # Simpler architecture
+    # Note: Will need custom policy to add opponent prediction head
+
+# PPO settings
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+# Self-play settings
+self_play:
+  opponent_pool_size: 5
+  update_frequency: 50000
+
+# Evaluation settings
+evaluation:
+  eval_frequency: 10000
+  n_eval_episodes: 100
+
+# Logging
+logging:
+  log_dir: "./logs/"
+  save_frequency: 50000
+  model_dir: "./models/"

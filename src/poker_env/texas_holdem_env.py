@@ -6,6 +6,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 from typing import Tuple, Dict, Any, Optional, List
+from treys import Card, Evaluator, Deck
 
 from src.poker_env.game_state import GameState, BettingRound
 from src.poker_env.hand_evaluator import HandEvaluator
@@ -83,18 +84,27 @@ class TexasHoldemEnv(gym.Env):
         num_all_in = 1 if include_all_in else 0
         self.action_space = spaces.Discrete(2 + num_raise_actions + num_all_in)
         
-        # Observation space: base (36) + opponent stats (72 if tracking, was 36)
-        base_obs_size = 7 * 4 + 4 + 4  # 36 (7 cards × 4 features + 8 game state)
+        # Observation space: base (53) + opponent stats (72 if tracking)
+        # Cards: 7 cards × 6 dims = 42 (rank_norm + 4 suit onehot + present)
+        # Hand features: 3 dims (hand_strength, pot_odds, spr)
+        # Game state: 8 dims (stack, pot, bet, call, active, pos, rnd, btn)
+        # Total base: 42 + 3 + 8 = 53
+        base_obs_size = 7 * 6 + 3 + 8  # 53
         opponent_obs_size = self.MAX_OPPONENTS * self.FEATURES_PER_OPPONENT if track_opponents else 0  # 9 × 8 = 72
-        obs_size = base_obs_size + opponent_obs_size  # 36 + 72 = 108 total
-        
+        obs_size = base_obs_size + opponent_obs_size  # 53 + 72 = 125 total
+
         self.observation_space = spaces.Box(
             low=0, high=np.inf, shape=(obs_size,), dtype=np.float32
         )
-        
+
         self.learning_agent_id = 0
         self.opponent_tracker = OpponentTracker(max_history_hands=1000)
         self.player_positions = {}
+
+        # Hand strength caching (street -> equity)
+        self._hand_strength_cache = {}
+        self._last_board_state = None
+        self.treys_evaluator = Evaluator()
     
     def set_raise_bins(self, raise_bins: List[float]):
         """Update raise bins and action space"""
@@ -119,9 +129,13 @@ class TexasHoldemEnv(gym.Env):
                 player.stack = self.starting_stack
         
         self.game_state.start_new_hand()
-        
+
+        # Clear hand strength cache for new hand
+        self._hand_strength_cache = {}
+        self._last_board_state = None
+
         # Start opponent tracking for this hand
-        players = [{'id': p.player_id, 'name': p.name, 'stack': p.stack} 
+        players = [{'id': p.player_id, 'name': p.name, 'stack': p.stack}
                    for p in self.game_state.players]
         self.opponent_tracker.start_hand(
             hand_number=self.game_state.hand_number,
@@ -131,7 +145,7 @@ class TexasHoldemEnv(gym.Env):
             big_blind=self.big_blind
         )
         self._calculate_player_positions()
-        
+
         return self._get_observation(), {}
     
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
@@ -171,25 +185,48 @@ class TexasHoldemEnv(gym.Env):
         done = self.game_state.is_hand_complete()
         reward = 0.0
         info = {'action': action_type_str, 'raise_bins': self.raise_bins}
-        
+
+        # Intermediate reward shaping for learning agent only
+        if current_player.player_id == self.learning_agent_id:
+            # Only shape rewards for folds
+            if action_int == 0:  # Fold action
+                # Calculate hand equity to determine if fold was good or bad
+                hand_equity = self._calculate_hand_strength(
+                    current_player.hand,
+                    self.game_state.community_cards
+                )
+
+                # Good fold: equity < 0.3 → positive reward
+                # Bad fold: equity > 0.6 → negative reward
+                # Neutral: 0.3 <= equity <= 0.6 → no shaping
+                if hand_equity < 0.3:
+                    # Good fold with weak hand
+                    fold_quality = (0.3 - hand_equity) / 0.3  # 0.0 to 1.0
+                    reward += 0.1 * fold_quality
+                elif hand_equity > 0.6:
+                    # Bad fold with strong hand
+                    fold_quality = (hand_equity - 0.6) / 0.4  # 0.0 to 1.0
+                    reward -= 0.1 * fold_quality
+
         # Track timesteps and reset stacks when limit hit
         self.timesteps_since_reset += 1
         self.total_timesteps += 1
-        
+
         if self.reset_stacks_every_n_timesteps is not None:
             if self.timesteps_since_reset >= self.reset_stacks_every_n_timesteps:
                 for player in self.game_state.players:
                     player.stack = self.starting_stack
                 self.timesteps_since_reset = 0
                 print(f"[RESET] Timestep {self.total_timesteps}")
-        
+
         if done:
             winnings = self.game_state.determine_winners()
-            # CRITICAL FIX: Always calculate reward for the agent being trained (player 0)
-            # not for whoever's turn it was when the hand ended
+            # Terminal reward: Always calculate for learning agent (player 0)
+            # Normalize by starting_stack for consistency
             learning_agent = self.game_state.players[self.learning_agent_id]
             agent_starting_stack = learning_agent.starting_stack_this_hand
-            reward = (learning_agent.stack - agent_starting_stack) / self.game_state.big_blind
+            terminal_reward = (learning_agent.stack - agent_starting_stack) / self.starting_stack
+            reward += terminal_reward  # Add to any intermediate shaping reward
             final_stacks = {p.player_id: p.stack for p in self.game_state.players}
             
             # End hand tracking
@@ -379,32 +416,51 @@ class TexasHoldemEnv(gym.Env):
         return self._get_observation(), reward, terminated, truncated, info
     
     def _get_observation(self) -> np.ndarray:
-        """Get observation vector (32 base + 36 opponent stats if tracking)"""
+        """Get observation vector (53 base + 72 opponent stats if tracking = 125 total)
+
+        Structure:
+        - Cards: 7 × 6 = 42 dims
+        - Hand features: 3 dims (hand_strength, pot_odds, spr)
+        - Game state: 8 dims
+        - Opponent stats: 72 dims (if tracking)
+        """
         player = self.game_state.get_current_player()
-        
-        # Base observation (32 dims)
+
+        # Encode cards (42 dims: 7 cards × 6)
         hole = self._encode_cards(player.hand)
         comm = self._encode_cards(
             self.game_state.community_cards + [0]*(5-len(self.game_state.community_cards))
         )
-        
+
+        # Calculate hand features (3 dims)
+        hand_strength = self._calculate_hand_strength(player.hand, self.game_state.community_cards)
+        pot_odds = self._calculate_pot_odds(player)
+        spr = self._calculate_spr(player)
+
+        # Game state features (8 dims)
         stack = player.stack / self.starting_stack
         pot = self.game_state.pot_manager.get_pot_total() / self.starting_stack
         bet = player.current_bet / self.starting_stack
         call = (self.game_state.pot_manager.current_bet - player.current_bet) / self.starting_stack
-        
+
         active = len(self.game_state.get_active_players()) / self.num_players
         pos = self.game_state.current_player_idx / self.num_players
         rnd = self.game_state.betting_round.value / 4
         btn = self.game_state.button_position / self.num_players
-        
-        base_obs = np.concatenate([hole, comm, [stack, pot, bet, call], [active, pos, rnd, btn]]).astype(np.float32)
-        
+
+        # Combine base observation (53 dims)
+        base_obs = np.concatenate([
+            hole, comm,
+            [hand_strength, pot_odds, spr],
+            [stack, pot, bet, call],
+            [active, pos, rnd, btn]
+        ]).astype(np.float32)
+
         # Add opponent stats if tracking enabled
         if self.track_opponents:
             opponent_features = self._get_opponent_features(player.player_id)
             return np.concatenate([base_obs, opponent_features])
-        
+
         return base_obs
     
     def _get_opponent_features(self, hero_id: int) -> np.ndarray:
@@ -419,17 +475,174 @@ class TexasHoldemEnv(gym.Env):
         )
         
         return np.array(features, dtype=np.float32)
-    
+
+    def _calculate_hand_strength(self, hole_cards: list, community_cards: list) -> float:
+        """Calculate hand equity using Monte Carlo simulation with Treys
+
+        Uses ~200 random rollouts to estimate equity (0.0-1.0).
+        Caches result per street to avoid redundant computation.
+
+        Returns:
+            float: Hand equity between 0.0 and 1.0
+        """
+        # Check cache
+        board_state = tuple(community_cards)
+        street = self.game_state.betting_round.value
+
+        if self._last_board_state == board_state:
+            cached_equity = self._hand_strength_cache.get(street)
+            if cached_equity is not None:
+                return cached_equity
+
+        # Update cache state
+        self._last_board_state = board_state
+
+        # Handle edge cases
+        if not hole_cards or len(hole_cards) < 2:
+            return 0.5
+
+        # Convert to Treys format
+        try:
+            hero_hand = hole_cards[:2]
+            board = [c for c in community_cards if c != 0]
+
+            # Preflop or early streets - use simplified equity
+            if len(board) == 0:
+                # Preflop: simple heuristic based on card ranks
+                # Extract rank from Treys encoding (bits 8-11): 0-12 for 2-A
+                r1 = (hero_hand[0] >> 8) & 0xF
+                r2 = (hero_hand[1] >> 8) & 0xF
+                high_card = max(r1, r2) / 12.0  # Normalize 0-12 to 0-1
+                pair = 1.0 if r1 == r2 else 0.0
+                equity = 0.3 + (high_card * 0.4) + (pair * 0.2)
+                equity = max(0.0, min(1.0, equity))  # Clamp to [0, 1]
+                self._hand_strength_cache[street] = equity
+                return equity
+
+            # Monte Carlo simulation for flop/turn/river
+            wins = 0
+            ties = 0
+            n_simulations = 200
+
+            # Get hero's hand score with current board
+            hero_score = self.treys_evaluator.evaluate(board, hero_hand)
+
+            # Simulate random opponent hands
+            for _ in range(n_simulations):
+                # Create deck without hero's cards and board
+                deck = Deck()
+                used_cards = set(hero_hand + board)
+
+                # Draw random opponent hand
+                opp_hand = []
+                for _ in range(2):
+                    card = deck.draw(1)
+                    while card in used_cards:
+                        card = deck.draw(1)
+                    opp_hand.append(card)
+                    used_cards.add(card)
+
+                # Complete the board if needed
+                sim_board = board[:]
+                while len(sim_board) < 5:
+                    card = deck.draw(1)
+                    while card in used_cards:
+                        card = deck.draw(1)
+                    sim_board.append(card)
+                    used_cards.add(card)
+
+                # Evaluate opponent's hand
+                opp_score = self.treys_evaluator.evaluate(sim_board, opp_hand)
+
+                # Compare scores (lower is better in Treys)
+                if hero_score < opp_score:
+                    wins += 1
+                elif hero_score == opp_score:
+                    ties += 1
+
+            equity = (wins + ties * 0.5) / n_simulations
+            equity = max(0.0, min(1.0, equity))  # Clamp to [0, 1]
+            self._hand_strength_cache[street] = equity
+            return equity
+
+        except Exception as e:
+            # Fallback to 0.5 if calculation fails
+            return 0.5
+
+    def _calculate_pot_odds(self, player) -> float:
+        """Calculate pot odds as amount_to_call / (pot + amount_to_call)
+
+        Returns:
+            float: Pot odds between 0.0 and 1.0
+        """
+        amount_to_call = self.game_state.pot_manager.current_bet - player.current_bet
+        pot = self.game_state.pot_manager.get_pot_total()
+
+        if amount_to_call <= 0:
+            return 0.0  # No call needed
+
+        pot_odds = amount_to_call / (pot + amount_to_call)
+        return min(pot_odds, 1.0)
+
+    def _calculate_spr(self, player) -> float:
+        """Calculate stack-to-pot ratio (SPR) as player_stack / pot
+
+        Normalized by dividing by 20 and capping at 1.0
+
+        Returns:
+            float: Normalized SPR between 0.0 and 1.0
+        """
+        pot = self.game_state.pot_manager.get_pot_total()
+
+        if pot <= 0:
+            return 1.0  # Infinite SPR -> cap at 1.0
+
+        spr = player.stack / pot
+        normalized_spr = spr / 20.0
+        return min(normalized_spr, 1.0)
+
     def _encode_cards(self, cards: list) -> np.ndarray:
-        """Encode cards"""
+        """Encode cards as [rank_norm, suit_onehot(4), present] = 6 dims per card
+
+        Treys card encoding:
+        - Rank: bits 8-11 (0-12 for 2-A)
+        - Suit: bits 12-15 (0x8=spade, 0x4=heart, 0x2=diamond, 0x1=club)
+
+        Suit encoding (one-hot):
+        - spade (0x8): [1,0,0,0]
+        - heart (0x4): [0,1,0,0]
+        - diamond (0x2): [0,0,1,0]
+        - club (0x1): [0,0,0,1]
+        """
         enc = []
         for c in cards:
             if c == 0:
-                enc.extend([0, 0, 0, 0])
+                # No card: all zeros
+                enc.extend([0, 0, 0, 0, 0, 0])
             else:
-                r = (c >> 8) & 0xFF
-                s = (c >> 12) & 0xF
-                enc.extend([r/14.0, s/4.0, 1.0, 0.0])
+                # Extract rank (bits 8-11): 0-12 for 2-A
+                rank = (c >> 8) & 0xF
+                # Normalize to 0-1
+                rank_norm = rank / 12.0
+
+                # Extract suit (bits 12-15): 0x1=spade, 0x2=heart, 0x4=diamond, 0x8=club
+                suit_bits = (c >> 12) & 0xF
+
+                # Suit one-hot (4 dims)
+                suit_onehot = [0.0, 0.0, 0.0, 0.0]
+                if suit_bits == 0x1:  # Spade
+                    suit_onehot[0] = 1.0
+                elif suit_bits == 0x2:  # Heart
+                    suit_onehot[1] = 1.0
+                elif suit_bits == 0x4:  # Diamond
+                    suit_onehot[2] = 1.0
+                elif suit_bits == 0x8:  # Club
+                    suit_onehot[3] = 1.0
+
+                # Present flag
+                present = 1.0
+
+                enc.extend([rank_norm] + suit_onehot + [present])
         return np.array(enc)
     
     def render(self, mode='human'):

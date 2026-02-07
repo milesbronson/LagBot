@@ -82,7 +82,7 @@ class OpponentAutoPlayWrapper:
         if terminated or truncated:
             learning_agent = self.env.game_state.players[0]
             agent_starting_stack = learning_agent.starting_stack_this_hand
-            reward = (learning_agent.stack - agent_starting_stack) / self.env.game_state.big_blind
+            reward = (learning_agent.stack - agent_starting_stack) / self.env.starting_stack
 
         # Step 2: Automatically play all opponents until main agent's turn or hand ends
         while not (terminated or truncated) and self.env.game_state.current_player_idx != 0:
@@ -106,7 +106,7 @@ class OpponentAutoPlayWrapper:
                     # Hand ended - calculate reward for learning agent (player 0)
                     learning_agent = self.env.game_state.players[0]
                     agent_starting_stack = learning_agent.starting_stack_this_hand
-                    reward = (learning_agent.stack - agent_starting_stack) / self.env.game_state.big_blind
+                    reward = (learning_agent.stack - agent_starting_stack) / self.env.starting_stack
             else:
                 break
 
