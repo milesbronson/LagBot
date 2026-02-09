@@ -122,12 +122,21 @@ class TexasHoldemEnv(gym.Env):
         """Reset for new hand"""
         if seed is not None:
             np.random.seed(seed)
-        
+
+        # Check if stack reset is due (BETWEEN hands, never mid-hand)
+        if self.reset_stacks_every_n_timesteps is not None:
+            if self.timesteps_since_reset >= self.reset_stacks_every_n_timesteps:
+                for player in self.game_state.players:
+                    player.stack = self.starting_stack
+                self.timesteps_since_reset = 0
+                print(f"[RESET] Timestep {self.total_timesteps}")
+
+        # Existing rebuy logic for busted players
         for player in self.game_state.players:
             if player.stack <= 0:
-                player.record_buy_in(self.starting_stack)  
+                player.record_buy_in(self.starting_stack)
                 player.stack = self.starting_stack
-        
+
         self.game_state.start_new_hand()
 
         # Clear hand strength cache for new hand
@@ -151,7 +160,7 @@ class TexasHoldemEnv(gym.Env):
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute action"""
         current_player = self.game_state.get_current_player()
-        starting_stack = current_player.stack + current_player.total_bet_this_hand
+        starting_stack = current_player.starting_stack_this_hand
         
         # Store pre-action state for tracking
         stack_before = current_player.stack + current_player.total_bet_this_hand
@@ -208,16 +217,9 @@ class TexasHoldemEnv(gym.Env):
                     fold_quality = (hand_equity - 0.6) / 0.4  # 0.0 to 1.0
                     reward -= 0.1 * fold_quality
 
-        # Track timesteps and reset stacks when limit hit
+        # Track timesteps (stack reset happens in reset() method between hands)
         self.timesteps_since_reset += 1
         self.total_timesteps += 1
-
-        if self.reset_stacks_every_n_timesteps is not None:
-            if self.timesteps_since_reset >= self.reset_stacks_every_n_timesteps:
-                for player in self.game_state.players:
-                    player.stack = self.starting_stack
-                self.timesteps_since_reset = 0
-                print(f"[RESET] Timestep {self.total_timesteps}")
 
         if done:
             winnings = self.game_state.determine_winners()
@@ -390,7 +392,7 @@ class TexasHoldemEnv(gym.Env):
     def step_with_raise(self, action: int, raise_amount: Optional[int] = None) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute action with custom raise amount (for humans)"""
         current_player = self.game_state.get_current_player()
-        starting_stack = current_player.stack + current_player.total_bet_this_hand
+        starting_stack = current_player.starting_stack_this_hand
 
         action_type = self.game_state.execute_action(action, raise_amount)
 

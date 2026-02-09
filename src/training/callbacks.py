@@ -5,6 +5,7 @@ Enhanced training callbacks for metrics collection
 from stable_baselines3.common.callbacks import BaseCallback
 import numpy as np
 from src.training.metrics import TrainingMetrics
+from src.training.opponent_profit_tracker import OpponentProfitTracker
 
 
 class MetricsCallback(BaseCallback):
@@ -288,3 +289,30 @@ class SimpleMetricsCallback(BaseCallback):
         self.episode_actions = []
         self.episode_wins = 0
         self.episode_count = 0
+
+class OpponentProfitCallback(BaseCallback):
+    """Callback to periodically checkpoint opponent profit data"""
+
+    def __init__(self, profit_tracker: OpponentProfitTracker, checkpoint_freq: int = 10000):
+        super().__init__()
+        self.profit_tracker = profit_tracker
+        self.checkpoint_freq = checkpoint_freq
+        self.last_checkpoint = 0
+
+    def _on_step(self) -> bool:
+        """Called at each step"""
+        if self.num_timesteps - self.last_checkpoint >= self.checkpoint_freq:
+            self.profit_tracker.checkpoint(self.num_timesteps)
+            self.last_checkpoint = self.num_timesteps
+
+            # Print summary periodically
+            if self.verbose > 0:
+                self.profit_tracker.print_summary()
+
+        return True
+
+    def _on_training_end(self) -> None:
+        """Save final checkpoint at end of training"""
+        self.profit_tracker.checkpoint(self.num_timesteps)
+        print("\nFinal Opponent Profit Summary:")
+        self.profit_tracker.print_summary()

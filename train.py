@@ -15,20 +15,22 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Optional
+import gymnasium as gym
 
 from src.poker_env.texas_holdem_env import TexasHoldemEnv
 from src.agents.ppo_agent import PPOAgent, TrainingCallback
 from src.agents.random_agent import CallAgent, RandomAgent
 from src.agents.opponent_ppo import OpponentPPO
 from src.training.metrics import TrainingMetrics
-from src.training.callbacks import MetricsCallback
+from src.training.callbacks import MetricsCallback, OpponentProfitCallback
+from src.training.opponent_profit_tracker import OpponentProfitTracker
 
 
 # ============================================================================
 # OPPONENT AUTO-PLAY WRAPPER - Handles opponent loop inline
 # ============================================================================
 
-class OpponentAutoPlayWrapper:
+class OpponentAutoPlayWrapper(gym.Env):
     """
     Wraps TexasHoldemEnv to automatically play opponent moves.
     
@@ -40,24 +42,43 @@ class OpponentAutoPlayWrapper:
     Compatible with SB3's API.
     """
     
-    def __init__(self, env: TexasHoldemEnv, opponents_list: List[Tuple[str, object]]):
+    def __init__(self, env: TexasHoldemEnv, opponents_list: List[Tuple[str, object]],
+                 profit_tracker: Optional[OpponentProfitTracker] = None):
         """
         Args:
             env: TexasHoldemEnv instance
             opponents_list: List of (opponent_type, agent) tuples
                            opponent_type: str (e.g., 'call', 'random', 'ppo_gen_1')
                            agent: Agent instance with select_action(obs) -> int method
+            profit_tracker: Optional tracker for per-opponent profits
         """
+        super().__init__()
         self.env = env
         self.opponents = opponents_list
-        
+        self.profit_tracker = profit_tracker
+
+        # Track starting stack for profit calculation
+        self.hand_starting_stack = None
+
         # Expose environment properties for SB3
         self.observation_space = env.observation_space
         self.action_space = env.action_space
+        self.metadata = env.metadata
     
     def reset(self, **kwargs):
         """Reset environment and return initial observation"""
         obs, info = self.env.reset(**kwargs)
+
+        # Record starting stack for profit tracking
+        if self.profit_tracker:
+            try:
+                if self.env.game_state and self.env.game_state.players:
+                    learning_agent = self.env.game_state.players[0]
+                    self.hand_starting_stack = learning_agent.starting_stack_this_hand
+            except Exception as e:
+                print(f"Warning: Failed to record starting stack: {e}")
+                self.hand_starting_stack = None
+
         return obs, info
     
     def step(self, action: int) -> Tuple:
@@ -84,6 +105,9 @@ class OpponentAutoPlayWrapper:
             agent_starting_stack = learning_agent.starting_stack_this_hand
             reward = (learning_agent.stack - agent_starting_stack) / self.env.starting_stack
 
+            # Track profit against each opponent (do this BEFORE the opponent loop check)
+            self._record_opponent_profits(learning_agent)
+
         # Step 2: Automatically play all opponents until main agent's turn or hand ends
         while not (terminated or truncated) and self.env.game_state.current_player_idx != 0:
 
@@ -107,6 +131,9 @@ class OpponentAutoPlayWrapper:
                     learning_agent = self.env.game_state.players[0]
                     agent_starting_stack = learning_agent.starting_stack_this_hand
                     reward = (learning_agent.stack - agent_starting_stack) / self.env.starting_stack
+
+                    # Track profit against each opponent
+                    self._record_opponent_profits(learning_agent)
             else:
                 break
 
@@ -119,6 +146,43 @@ class OpponentAutoPlayWrapper:
     def close(self):
         """Close the environment"""
         return self.env.close()
+
+    def _record_opponent_profits(self, learning_agent):
+        """Record profit/loss against each opponent for this hand"""
+        if not self.profit_tracker:
+            return
+
+        if self.hand_starting_stack is None:
+            return
+
+        try:
+            total_profit = (learning_agent.stack - self.hand_starting_stack) / self.env.starting_stack
+
+            # In a 3-player game, we play against 2 opponents simultaneously
+            # Approximate per-opponent profit by dividing total profit equally
+            # (More sophisticated attribution could be added later)
+            per_opponent_profit = total_profit / len(self.opponents)
+
+            for opp_idx, (opponent_type, opponent) in enumerate(self.opponents):
+                opponent_id = opp_idx + 1  # Player IDs: 0=agent, 1=opp1, 2=opp2
+                opponent_name = getattr(opponent, 'name', f'Opponent_{opponent_id}')
+
+                # Register opponent if first time seeing them
+                if opponent_id not in self.profit_tracker.opponent_types:
+                    self.profit_tracker.register_opponent(
+                        opponent_id=opponent_id,
+                        name=opponent_name,
+                        opponent_type=opponent_type
+                    )
+
+                # Record the result
+                self.profit_tracker.record_hand_result(
+                    opponent_id=opponent_id,
+                    profit=per_opponent_profit
+                )
+        except Exception as e:
+            # Log but don't crash training
+            print(f"Warning: Failed to record opponent profit: {e}")
 
 
 # ============================================================================
@@ -297,18 +361,21 @@ def train(config_path: str, run_name: str = None):
     # =========================================================================
     # METRICS & LOGGING
     # =========================================================================
-    
+
     metrics = TrainingMetrics(run_name, save_dir="metrics")
+    profit_tracker = OpponentProfitTracker(run_name, save_dir="metrics")
+
     training_config = config['training']
     log_dir = os.path.join(config['logging']['log_dir'], run_name)
     model_dir = os.path.join(config['logging']['model_dir'], run_name)
-    
+
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
-    
+
     print(f"Metrics: metrics/{run_name}/")
     print(f"Logs: {log_dir}")
     print(f"Models: {model_dir}")
+    print(f"Opponent profit tracking: Enabled")
     print()
     
     # =========================================================================
@@ -345,9 +412,14 @@ def train(config_path: str, run_name: str = None):
     # =========================================================================
     # WRAP ENVIRONMENT WITH OPPONENT AUTO-PLAY
     # =========================================================================
-    
-    wrapped_env = OpponentAutoPlayWrapper(env, opponents)
-    
+
+    wrapped_env = OpponentAutoPlayWrapper(env, opponents, profit_tracker=profit_tracker)
+
+    # Set the wrapped environment on the agent's model
+    agent.model.set_env(wrapped_env)
+    print(f"✓ Agent set to use wrapped environment with opponent auto-play")
+    print()
+
     # =========================================================================
     # CREATE CALLBACKS
     # =========================================================================
@@ -362,7 +434,12 @@ def train(config_path: str, run_name: str = None):
         metrics=metrics,
         log_freq=10000
     )
-    
+
+    profit_callback = OpponentProfitCallback(
+        profit_tracker=profit_tracker,
+        checkpoint_freq=10000
+    )
+
     # =========================================================================
     # TRAIN
     # =========================================================================
@@ -373,7 +450,7 @@ def train(config_path: str, run_name: str = None):
     
     agent.model.learn(
         total_timesteps=training_config['total_timesteps'],
-        callback=[save_callback, metrics_callback]
+        callback=[save_callback, metrics_callback, profit_callback]
     )
     
     # =========================================================================

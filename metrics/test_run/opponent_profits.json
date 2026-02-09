@@ -1,0 +1,35 @@
+{
+  "opponent_results": {
+    "1": {
+      "name": "TestCallAgent",
+      "type": "call",
+      "hands_played": 10,
+      "total_profit": -0.06,
+      "avg_profit": -0.006,
+      "win_count": 0,
+      "loss_count": 9,
+      "win_rate": 0.0
+    },
+    "2": {
+      "name": "TestRandomAgent",
+      "type": "random",
+      "hands_played": 10,
+      "total_profit": -0.06,
+      "avg_profit": -0.006,
+      "win_count": 0,
+      "loss_count": 9,
+      "win_rate": 0.0
+    }
+  },
+  "history": {
+    "timesteps": [
+      10
+    ],
+    "opponent_profits": [
+      {
+        "1": -0.06,
+        "2": -0.06
+      }
+    ]
+  }
+}

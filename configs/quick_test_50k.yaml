@@ -1,0 +1,32 @@
+# Quick 50k test config
+environment:
+  num_players: 3
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  reset_stacks_every_n_timesteps: 3000
+
+training:
+  total_timesteps: 50000  # Quick test
+  learning_rate: 0.0003
+  n_steps: 3000
+  batch_size: 256
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.03
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+  policy_kwargs:
+    net_arch:
+      pi: [512, 256, 256, 128]
+      vf: [512, 256, 256, 128]
+
+logging:
+  log_dir: "./logs/"
+  save_frequency: 25000
+  model_dir: "./models/"

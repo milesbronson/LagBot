@@ -22,18 +22,18 @@ def create_mock_observation_with_opponent_stats(base_obs, opponent_stats):
     """
     Create observation with specific opponent stats
 
-    Observation structure (108 dims):
-    - Base game state: 36 dims
-    - Opponent 1 stats: 36 dims
-    - Opponent 2 stats: 36 dims
+    Observation structure (125 dims):
+    - Base game state: 69 dims
+    - Opponent 1 stats: 28 dims
+    - Opponent 2 stats: 28 dims
 
-    Opponent stats per player (36 dims each):
+    Opponent stats per player (28 dims each):
     - VPIP, PFR, aggression, fold_to_3bet, check_fold, check_call, check_raise, bet_fold, bet_call, bet_raise, etc.
     """
     obs = base_obs.copy()
-    # Inject opponent stats into observation (dims 36-72 for opponent 1, 72-108 for opponent 2)
-    obs[36:72] = opponent_stats[0]  # Opponent 1
-    obs[72:108] = opponent_stats[1]  # Opponent 2
+    # Inject opponent stats into observation (dims 69-97 for opponent 1, 97-125 for opponent 2)
+    obs[69:97] = opponent_stats[0]  # Opponent 1
+    obs[97:125] = opponent_stats[1]  # Opponent 2
     return obs
 
 
@@ -53,7 +53,8 @@ def test_opponent_differentiation(agent, env):
 
     # Get a sample observation
     obs, _ = env.reset()
-    base_obs = obs[:36]  # Just game state, no opponent stats
+    print(f"Observation shape: {obs.shape}")
+    base_obs = obs[:69]  # Just game state, no opponent stats (125 - 28*2 = 69)
 
     # Define different opponent profiles
     opponent_profiles = {
@@ -77,9 +78,9 @@ def test_opponent_differentiation(agent, env):
         },
     }
 
-    # Create full opponent stat vectors (36 dims each)
+    # Create full opponent stat vectors (28 dims each)
     def create_opponent_vector(profile):
-        vec = np.zeros(36)
+        vec = np.zeros(28)
         vec[0] = profile["vpip"]
         vec[1] = profile["pfr"]
         vec[2] = profile["aggression"]
@@ -177,9 +178,9 @@ def check_observation_usage(agent, env):
 
         if obs_tensor.grad is not None:
             # Check gradients for different parts of observation
-            base_grad = obs_tensor.grad[0, :36].abs().mean()
-            opp1_grad = obs_tensor.grad[0, 36:72].abs().mean()
-            opp2_grad = obs_tensor.grad[0, 72:108].abs().mean()
+            base_grad = obs_tensor.grad[0, :69].abs().mean()
+            opp1_grad = obs_tensor.grad[0, 69:97].abs().mean()
+            opp2_grad = obs_tensor.grad[0, 97:125].abs().mean()
 
             print(f"\nAction {action_idx}:")
             print(f"  Base game state gradient: {base_grad:.6f}")
