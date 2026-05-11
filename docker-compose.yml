@@ -1,8 +1,21 @@
 version: '3.8'
 
 services:
+  db:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: lagbot
+      POSTGRES_PASSWORD: lagbot
+      POSTGRES_DB: lagbot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     volumes:
@@ -13,6 +26,9 @@ services:
     command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
     environment:
       - PYTHONPATH=/app
+      - DATABASE_URL=postgresql://lagbot:lagbot@db:5432/lagbot
+    depends_on:
+      - db
 
   frontend:
     build: ./frontend
@@ -27,3 +43,6 @@ services:
       - DOCKER_ENV=true
     depends_on:
       - backend
+
+volumes:
+  pgdata:

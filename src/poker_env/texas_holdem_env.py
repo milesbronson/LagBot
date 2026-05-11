@@ -158,23 +158,41 @@ class TexasHoldemEnv(gym.Env):
         return self._get_observation(), {}
     
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        """Execute action"""
+        """Execute a discrete action (used by bots and training)."""
+        action_int, raise_amount = self._validate_and_convert_action(action)
+        return self._execute_step(action_int, raise_amount)
+
+    def step_with_amount(self, action_int: int, raise_amount: Optional[int] = None) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        """Execute an action with an explicit raise amount (used by human players).
+
+        Args:
+            action_int: 0=fold, 1=call, 2=raise
+            raise_amount: For raises, the total bet amount (to_call + raise_chips).
+                          If >= player stack, becomes all-in.
+        """
+        if action_int == 2 and raise_amount is not None:
+            player = self.game_state.get_current_player()
+            if raise_amount >= player.stack:
+                raise_amount = player.stack
+        return self._execute_step(action_int, raise_amount)
+
+    def _execute_step(self, action_int: int, raise_amount: Optional[int]) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        """Internal step execution shared by step() and step_with_amount()."""
         current_player = self.game_state.get_current_player()
         starting_stack = current_player.starting_stack_this_hand
-        
+
         # Store pre-action state for tracking
         stack_before = current_player.stack + current_player.total_bet_this_hand
         pot_before = self.game_state.pot_manager.get_pot_total()
         street_before = self._betting_round_to_street(self.game_state.betting_round)
         position = self.game_state.current_player_idx
-        
-        action_int, raise_amount = self._validate_and_convert_action(action)
+
         action_type_str = self.game_state.execute_action(action_int, raise_amount)
-        
+
         # Record action with opponent tracker
         action_enum = self._string_to_action_enum(action_type_str)
         action_amount = self._calculate_action_amount(current_player, action_int, raise_amount)
-        
+
         self.opponent_tracker.record_action(
             player_id=current_player.player_id,
             player_name=current_player.name,
@@ -190,67 +208,69 @@ class TexasHoldemEnv(gym.Env):
         if self.game_state.is_betting_round_complete():
             if not self.game_state.is_hand_complete():
                 self.game_state.advance_betting_round()
-        
+                # All-in runout: deal remaining streets when no one can act
+                while not self.game_state.is_hand_complete():
+                    active = self.game_state.get_active_players()
+                    if any(not p.is_all_in for p in active):
+                        break
+                    self.game_state.advance_betting_round()
+
         done = self.game_state.is_hand_complete()
         reward = 0.0
         info = {'action': action_type_str, 'raise_bins': self.raise_bins}
 
         # Intermediate reward shaping for learning agent only
         if current_player.player_id == self.learning_agent_id:
-            # Only shape rewards for folds
             if action_int == 0:  # Fold action
-                # Calculate hand equity to determine if fold was good or bad
                 hand_equity = self._calculate_hand_strength(
                     current_player.hand,
                     self.game_state.community_cards
                 )
-
-                # Good fold: equity < 0.3 → positive reward
-                # Bad fold: equity > 0.6 → negative reward
-                # Neutral: 0.3 <= equity <= 0.6 → no shaping
                 if hand_equity < 0.3:
-                    # Good fold with weak hand
-                    fold_quality = (0.3 - hand_equity) / 0.3  # 0.0 to 1.0
+                    fold_quality = (0.3 - hand_equity) / 0.3
                     reward += 0.1 * fold_quality
                 elif hand_equity > 0.6:
-                    # Bad fold with strong hand
-                    fold_quality = (hand_equity - 0.6) / 0.4  # 0.0 to 1.0
+                    fold_quality = (hand_equity - 0.6) / 0.4
                     reward -= 0.1 * fold_quality
 
-        # Track timesteps (stack reset happens in reset() method between hands)
+        # Track timesteps
         self.timesteps_since_reset += 1
         self.total_timesteps += 1
 
         if done:
             winnings = self.game_state.determine_winners()
-            # Terminal reward: Always calculate for learning agent (player 0)
-            # Normalize by starting_stack for consistency
             learning_agent = self.game_state.players[self.learning_agent_id]
             agent_starting_stack = learning_agent.starting_stack_this_hand
             terminal_reward = (learning_agent.stack - agent_starting_stack) / self.starting_stack
-            reward += terminal_reward  # Add to any intermediate shaping reward
+            reward += terminal_reward
             final_stacks = {p.player_id: p.stack for p in self.game_state.players}
-            
-            # End hand tracking
+
             winner_ids = [pid for pid, amt in winnings.items() if amt > 0]
             self.opponent_tracker.end_hand(
                 winners=winner_ids,
                 winnings=winnings,
                 final_stacks=final_stacks
             )
-            
+
             info['winnings'] = winnings
             info['hand_complete'] = True
-        
+
         terminated = done
         truncated = False
         return self._get_observation(), reward, terminated, truncated, info
     
     def _calculate_player_positions(self):
-        """Record player positions (0=dealer, 1=SB, 2=BB, etc)"""
+        """Record player positions relative to the dealer button this hand.
+
+        Position 0 = dealer/button, 1 = SB, 2 = BB, 3..n-1 = subsequent seats.
+        Computed as `(seat_index - button_position) mod num_players` so each
+        player's recorded position rotates as the button rotates between hands.
+        """
+        button = self.game_state.button_position
+        n = len(self.game_state.players)
         positions = {}
         for i, player in enumerate(self.game_state.players):
-            positions[player.player_id] = i
+            positions[player.player_id] = (i - button) % n
         self.opponent_tracker.record_positions(positions)
     
     def _betting_round_to_street(self, betting_round: BettingRound) -> Street:
@@ -399,6 +419,11 @@ class TexasHoldemEnv(gym.Env):
         if self.game_state.is_betting_round_complete():
             if not self.game_state.is_hand_complete():
                 self.game_state.advance_betting_round()
+                while not self.game_state.is_hand_complete():
+                    active = self.game_state.get_active_players()
+                    if any(not p.is_all_in for p in active):
+                        break
+                    self.game_state.advance_betting_round()
 
         done = self.game_state.is_hand_complete()
         reward = 0.0

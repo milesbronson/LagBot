@@ -408,115 +408,235 @@ class OpponentTracker:
         
         self.current_hand = None
     
+    def _analyze_preflop_action_sequence(self, preflop_actions):
+        """
+        Walk preflop actions once to derive hand-level per-player attributions.
+
+        Sets returned:
+          - three_bet_opportunities: faced a raise (by someone else) before
+            having raised themselves, regardless of their own response.
+          - three_bets_made: their raise was exactly the 3rd bet of the
+            sequence (one prior raise by someone else, they hadn't raised yet).
+          - raised_preflop: made any preflop raise/all-in this hand.
+          - squeeze_opportunities: at the moment they acted, there was a raise
+            AND at least one caller after that raise, and they hadn't raised.
+          - squeeze_attempts: their raise satisfied the squeeze condition.
+          - preflop_aggressor: the LAST player to raise preflop. None if no raises.
+          - faced_3bet_after_raising: they raised, then someone else raised
+            again. Per-hand (not lifetime).
+          - folded_to_3bet_after_raising: subset whose next action after the
+            opposing re-raise was FOLD.
+        """
+        raises_so_far = 0
+        callers_since_last_raise = 0
+        raised_already = set()
+
+        three_bet_opportunities = set()
+        three_bets_made = set()
+        raised_preflop = set()
+        squeeze_opportunities = set()
+        squeeze_attempts = set()
+        preflop_aggressor = None
+
+        for a in preflop_actions:
+            pid = a.player_id
+            if a.action == Action.POST_BLIND:
+                continue
+
+            if raises_so_far >= 1 and pid not in raised_already:
+                three_bet_opportunities.add(pid)
+                if callers_since_last_raise >= 1:
+                    squeeze_opportunities.add(pid)
+
+            if a.action in [Action.RAISE, Action.ALL_IN]:
+                if raises_so_far == 1 and pid not in raised_already:
+                    three_bets_made.add(pid)
+                    if callers_since_last_raise >= 1:
+                        squeeze_attempts.add(pid)
+                raised_preflop.add(pid)
+                raised_already.add(pid)
+                raises_so_far += 1
+                callers_since_last_raise = 0
+                preflop_aggressor = pid
+            elif a.action == Action.CALL:
+                if raises_so_far >= 1:
+                    callers_since_last_raise += 1
+
+        faced_3bet_after_raising = set()
+        folded_to_3bet_after_raising = set()
+        for pid in raised_preflop:
+            first_raise_idx = None
+            for i, a in enumerate(preflop_actions):
+                if a.player_id == pid and a.action in [Action.RAISE, Action.ALL_IN]:
+                    first_raise_idx = i
+                    break
+            if first_raise_idx is None:
+                continue
+            re_raise_idx = None
+            for i in range(first_raise_idx + 1, len(preflop_actions)):
+                a = preflop_actions[i]
+                if a.player_id != pid and a.action in [Action.RAISE, Action.ALL_IN]:
+                    re_raise_idx = i
+                    break
+            if re_raise_idx is None:
+                continue
+            faced_3bet_after_raising.add(pid)
+            for i in range(re_raise_idx + 1, len(preflop_actions)):
+                a = preflop_actions[i]
+                if a.player_id == pid:
+                    if a.action == Action.FOLD:
+                        folded_to_3bet_after_raising.add(pid)
+                    break
+
+        return {
+            'three_bet_opportunities': three_bet_opportunities,
+            'three_bets_made': three_bets_made,
+            'raised_preflop': raised_preflop,
+            'squeeze_opportunities': squeeze_opportunities,
+            'squeeze_attempts': squeeze_attempts,
+            'preflop_aggressor': preflop_aggressor,
+            'faced_3bet_after_raising': faced_3bet_after_raising,
+            'folded_to_3bet_after_raising': folded_to_3bet_after_raising,
+        }
+
+    def _analyze_flop_action_sequence(self, flop_actions, preflop_aggressor):
+        """
+        Determine whether the preflop aggressor made a flop c-bet, and who
+        faced / folded to it.
+
+        A flop c-bet is the preflop aggressor opening flop betting with a
+        bet/all-in. Anyone may check in front of the aggressor; the first
+        non-check action must come from the aggressor and must be aggressive.
+        If a different player opens with a bet (donk) or the aggressor checks,
+        no c-bet occurred.
+        """
+        aggressor_saw_flop = preflop_aggressor is not None and any(
+            a.player_id == preflop_aggressor for a in flop_actions
+        )
+
+        cbet_event_idx = None
+        if preflop_aggressor is not None and flop_actions:
+            for i, a in enumerate(flop_actions):
+                if a.action == Action.CHECK:
+                    if a.player_id == preflop_aggressor:
+                        break
+                    continue
+                if a.player_id == preflop_aggressor and a.action in [
+                    Action.BET, Action.RAISE, Action.ALL_IN
+                ]:
+                    cbet_event_idx = i
+                break
+
+        faced_cbet = set()
+        folded_to_cbet = set()
+        if cbet_event_idx is not None:
+            for i in range(cbet_event_idx + 1, len(flop_actions)):
+                a = flop_actions[i]
+                if a.player_id == preflop_aggressor:
+                    continue
+                if a.player_id in faced_cbet:
+                    continue
+                faced_cbet.add(a.player_id)
+                if a.action == Action.FOLD:
+                    folded_to_cbet.add(a.player_id)
+
+        return {
+            'cbet_made': cbet_event_idx is not None,
+            'aggressor_saw_flop': aggressor_saw_flop,
+            'faced_cbet': faced_cbet,
+            'folded_to_cbet': folded_to_cbet,
+        }
+
     def _update_opponent_stats(self, hand: HandRecord):
         """Calculate updated statistics for all opponents in hand"""
-        
+
+        preflop_all = [a for a in hand.actions if a.street == Street.PREFLOP]
+        flop_all = [a for a in hand.actions if a.street == Street.FLOP]
+
+        preflop_info = self._analyze_preflop_action_sequence(preflop_all)
+        flop_info = self._analyze_flop_action_sequence(
+            flop_all, preflop_info['preflop_aggressor']
+        )
+
+        folded_players = set(a.player_id for a in hand.actions if a.action == Action.FOLD)
+        non_folded = set(hand.players_in_hand) - folded_players
+        reached_showdown = non_folded if len(non_folded) >= 2 else set()
+
+        saw_flop_players = set(a.player_id for a in flop_all)
+
         for player_id in hand.players_in_hand:
             if player_id not in self.opponents:
                 continue
-            
+
             opponent = self.opponents[player_id]
-            position = hand.players_positions.get(player_id, -1)  # -1 = unknown position
-            
-            # Get actions by this player
+            position = hand.players_positions.get(player_id, -1)
+
             player_actions = [a for a in hand.actions if a.player_id == player_id]
-            
             if not player_actions:
                 continue
-            
-            # Increment hands played
+
             opponent.hands_played += 1
             opponent.last_update = datetime.now().timestamp()
             opponent.confidence = min(opponent.hands_played / 100, 1.0)
-            
-            # Track position stats
+
             pos_key = position
             if pos_key not in opponent.position_stats:
                 opponent.position_stats[pos_key] = {
-                    'hands': 0,
-                    'vpip_count': 0,
-                    'pfr_count': 0,
+                    'hands': 0, 'vpip_count': 0, 'pfr_count': 0,
                 }
             opponent.position_stats[pos_key]['hands'] += 1
-            
-            # Preflop actions
+
             preflop_actions = [a for a in player_actions if a.street == Street.PREFLOP]
-            flop_actions = [a for a in player_actions if a.street == Street.FLOP]
-            
-            # 1. VPIP: Voluntarily put money in pot
+
             if preflop_actions:
-                if any(a.action in [Action.CALL, Action.RAISE, Action.BET, Action.ALL_IN] for a in preflop_actions):
+                if any(a.action in [Action.CALL, Action.RAISE, Action.BET, Action.ALL_IN]
+                       for a in preflop_actions):
                     opponent.position_stats[pos_key]['vpip_count'] += 1
-                
-                # 2. PFR: Preflop raise
-                if any(a.action in [Action.RAISE, Action.ALL_IN] for a in preflop_actions):
+                if any(a.action in [Action.RAISE, Action.ALL_IN]
+                       for a in preflop_actions):
                     opponent.position_stats[pos_key]['pfr_count'] += 1
-                
-                # 3. 3-Bet Frequency: Track if player raised to a raise
-                preflop_raises = [a for a in preflop_actions if a.action in [Action.RAISE, Action.ALL_IN]]
-                if preflop_raises:
-                    opponent.raised_preflop += 1
-                    opponent.three_bet_opportunities += 1
-                    # If they raised when someone else raised, it's a 3-bet
-                    if len(preflop_raises) >= 2:
-                        opponent.three_bet_count += 1
-            
-            # 4. WTSD: Went To Showdown
-            if player_id in hand.winner_ids or (hand.actions and any(a.action == Action.FOLD for a in player_actions) and len(player_actions) >= 5):
-                # Simple heuristic: if they got to river or were in at showdown
-                if len(flop_actions) > 0:  # Made it to at least flop
-                    opponent.went_to_showdown += 1
-                    
-                    # 5. W$SD: Won Money At Showdown
-                    if player_id in hand.winner_ids and hand.winnings.get(player_id, 0) > 0:
-                        opponent.showdown_wins += 1
-                        opponent.won_at_showdown += 1
-                        opponent.money_won_at_showdown += hand.winnings.get(player_id, 0)
-            
-            # 6. WWSF: Won When Saw Flop
-            if flop_actions:
+
+            if player_id in preflop_info['raised_preflop']:
+                opponent.raised_preflop += 1
+
+            if player_id in preflop_info['three_bet_opportunities']:
+                opponent.three_bet_opportunities += 1
+            if player_id in preflop_info['three_bets_made']:
+                opponent.three_bet_count += 1
+
+            if player_id in preflop_info['squeeze_opportunities']:
+                opponent.squeeze_opportunities += 1
+            if player_id in preflop_info['squeeze_attempts']:
+                opponent.squeeze_attempts += 1
+
+            if player_id in preflop_info['faced_3bet_after_raising']:
+                opponent.faced_3bet_after_raise += 1
+            if player_id in preflop_info['folded_to_3bet_after_raising']:
+                opponent.folded_to_3bet_after_raise += 1
+
+            if player_id in reached_showdown:
+                opponent.went_to_showdown += 1
+                if player_id in hand.winner_ids and hand.winnings.get(player_id, 0) > 0:
+                    opponent.showdown_wins += 1
+                    opponent.won_at_showdown += 1
+                    opponent.money_won_at_showdown += hand.winnings.get(player_id, 0)
+
+            if player_id in saw_flop_players:
                 opponent.saw_flop_count += 1
                 if player_id in hand.winner_ids:
                     opponent.won_when_saw_flop += 1
-            
-            # 7. Fold to 3-Bet After Raising: Track folding to 3-bet
-            if opponent.raised_preflop > 0:
-                # Check if faced a re-raise (3-bet)
-                if len(preflop_actions) >= 2:
-                    preflop_raises = [a for a in preflop_actions if a.action in [Action.RAISE, Action.ALL_IN]]
-                    if len(preflop_raises) == 1:  # Raised once
-                        # Check if faced re-raise
-                        opponent.faced_3bet_after_raise += 1
-                        if preflop_actions[-1].action == Action.FOLD:
-                            opponent.folded_to_3bet_after_raise += 1
-            
-            # 8. Preflop Squeeze: Difficult to detect perfectly, simplified version
-            # Squeeze = raise when there's already a raise and at least one caller
-            if preflop_actions and any(a.action == Action.RAISE for a in preflop_actions):
-                # Check if it looks like a squeeze (raise after other action)
-                action_types = [a.action for a in preflop_actions]
-                if len([a for a in preflop_actions if a.action in [Action.CALL, Action.BET]]) > 0:
-                    opponent.squeeze_opportunities += 1
-                    if action_types[-1] == Action.RAISE:
-                        opponent.squeeze_attempts += 1
-            
-            # 9. Flop C-Bet: Continuation bet on flop
-            if len(flop_actions) > 0 and len(preflop_actions) > 0:
-                # If they raised preflop and bet flop, it's a c-bet opportunity
-                if any(a.action in [Action.RAISE, Action.BET] for a in preflop_actions):
-                    opponent.flop_cbet_opportunities += 1
-                    if any(a.action in [Action.BET, Action.RAISE] for a in flop_actions):
-                        opponent.flop_cbet_made += 1
-            
-            # 10. Fold to Flop C-Bet: Track folding to flop bet
-            if flop_actions and any(a.action in [Action.BET, Action.RAISE] for a in flop_actions):
-                # Check if they faced a bet and folded
-                fold_actions = [a for a in flop_actions if a.action == Action.FOLD]
-                if fold_actions:
-                    opponent.faced_flop_cbet += 1
-                    opponent.folded_to_flop_cbet += 1
-            
-            # Calculate all percentages
+
+            if (player_id == preflop_info['preflop_aggressor']
+                    and flop_info['aggressor_saw_flop']):
+                opponent.flop_cbet_opportunities += 1
+                if flop_info['cbet_made']:
+                    opponent.flop_cbet_made += 1
+
+            if player_id in flop_info['faced_cbet']:
+                opponent.faced_flop_cbet += 1
+            if player_id in flop_info['folded_to_cbet']:
+                opponent.folded_to_flop_cbet += 1
+
             opponent.recalculate_metrics()
             opponent._recalculate_stats()
     

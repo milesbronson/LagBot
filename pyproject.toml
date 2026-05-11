@@ -1,0 +1,67 @@
+[project]
+name = "lagbot"
+version = "0.1.0"
+description = "Texas Hold'em RL bot trained with PPO and self-play, with a FastAPI/React play interface."
+readme = "README.md"
+requires-python = ">=3.10,<3.12"
+license = { text = "MIT" }
+dependencies = [
+    # Core RL
+    "gymnasium>=0.29.0",
+    "stable-baselines3>=2.3.0",
+    "torch>=2.1.0",
+    "tensorboard==2.15.1",
+
+    # Poker hand evaluation
+    "treys==0.1.8",
+
+    # Numerics + utilities
+    "numpy==1.24.3",
+    "pyyaml==6.0.1",
+    "typing-extensions==4.8.0",
+
+    # Data + plotting (training analytics scripts)
+    "pandas==2.0.3",
+    "matplotlib==3.7.2",
+    "seaborn==0.12.2",
+]
+
+[dependency-groups]
+backend = [
+    "fastapi==0.104.1",
+    "uvicorn[standard]==0.24.0",
+    "websockets==12.0",
+    "pydantic==2.5.0",
+    "python-multipart==0.0.6",
+    "asyncpg>=0.29.0",
+]
+dev = [
+    "pytest==7.4.3",
+    "pytest-cov==4.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
