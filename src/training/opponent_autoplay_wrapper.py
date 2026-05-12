@@ -85,16 +85,27 @@ class OpponentAutoPlayWrapper(gym.Env):
         through unchanged — do not recompute it here."""
         obs, reward, terminated, truncated, info = self.env.step(action)
 
+        # Stash the learner-specific step info before auto-play overwrites
+        # the dict with opponent actions. Per-street action breakdown in
+        # MetricsCallback reads these keys to know which street the
+        # learner's action happened on.
+        learner_info = {
+            "learner_action": info.get("action"),
+            "learner_street": info.get("street"),
+        }
+
         if terminated or truncated:
             self._record_opponent_profits(
                 self.env.game_state.players[self.learner_id]
             )
+            info.update(learner_info)
             return obs, reward, terminated, truncated, info
 
         obs, opp_reward, terminated, truncated, info = self._auto_play_opponents(
             obs, terminated, truncated, info
         )
         reward = reward + opp_reward
+        info.update(learner_info)
 
         if terminated or truncated:
             self._record_opponent_profits(

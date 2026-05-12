@@ -44,6 +44,14 @@ class TrainingMetrics:
         self.action_counts = {}
         self.total_actions = 0
 
+        # Per-street action breakdown: parallel arrays of timestep + dict
+        # of {street: {fold, call, raise, all_in, count}}. Lets the dash-
+        # board plot e.g. how preflop raise rate evolves over training.
+        self.street_breakdown = {
+            'timesteps': [],
+            'distributions': [],
+        }
+
     def log_step(self, timestep, episode_rewards, agent_stats=None, learning_metrics=None):
         """Log metrics from training step"""
         self.record_step(timestep, episode_rewards, agent_stats, learning_metrics)
@@ -99,15 +107,30 @@ class TrainingMetrics:
         self.action_history['distributions'].append(dist)
         self._save()
     
+    def record_street_breakdown(self, timestep: int, per_street: Dict[str, Dict[str, float]]):
+        """Record per-street action-rate breakdown at a checkpoint.
+
+        `per_street` shape: {street: {fold, call, raise, all_in, count}}.
+        Appended to a parallel timestep array and saved to disk so the
+        registry rollup / dashboard can plot e.g. river aggression over
+        training time."""
+        self.street_breakdown['timesteps'].append(timestep)
+        self.street_breakdown['distributions'].append(per_street)
+        self._save()
+
     def _save(self):
         """Save metrics and action history to JSON"""
         metrics_file = os.path.join(self.run_dir, 'metrics.json')
         with open(metrics_file, 'w') as f:
             json.dump(self.metrics, f, indent=2)
-        
+
         actions_file = os.path.join(self.run_dir, 'action_history.json')
         with open(actions_file, 'w') as f:
             json.dump(self.action_history, f, indent=2)
+
+        streets_file = os.path.join(self.run_dir, 'street_breakdown.json')
+        with open(streets_file, 'w') as f:
+            json.dump(self.street_breakdown, f, indent=2)
     
     def get_summary(self) -> Dict[str, Any]:
         """Get high-level summary"""

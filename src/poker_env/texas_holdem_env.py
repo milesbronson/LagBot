@@ -237,7 +237,12 @@ class TexasHoldemEnv(gym.Env):
 
         done = self.game_state.is_hand_complete()
         reward = 0.0
-        info = {'action': action_type_str, 'raise_bins': self.raise_bins}
+        info = {
+            'action': action_type_str,
+            'raise_bins': self.raise_bins,
+            'street': street_before.value,
+            'acting_player_id': current_player.player_id,
+        }
 
         # Intermediate reward shaping for learning agent only
         if current_player.player_id == self.learning_agent_id:

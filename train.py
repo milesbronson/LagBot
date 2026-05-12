@@ -36,7 +36,11 @@ from src.agents.random_agent import CallAgent, RandomAgent
 from src.poker_env.texas_holdem_env import TexasHoldemEnv
 from src.training.agent_card import AgentCard
 from src.training.agent_registry import AgentRegistry
-from src.training.callbacks import MetricsCallback, OpponentProfitCallback
+from src.training.callbacks import (
+    CriticCalibrationCallback,
+    MetricsCallback,
+    OpponentProfitCallback,
+)
 from src.training.eval_gate import EvalGate
 from src.training.metrics import TrainingMetrics
 from src.training.opponent_autoplay_wrapper import OpponentAutoPlayWrapper
@@ -242,6 +246,9 @@ def train_one_generation(
     profit_callback = OpponentProfitCallback(
         profit_tracker=profit_tracker, checkpoint_freq=10000,
     )
+    critic_callback = CriticCalibrationCallback(
+        save_dir=os.path.join("metrics", run_name), flush_freq=10000,
+    )
 
     print(f"\n{'='*70}\nTraining {run_name}  (gen {registry.next_generation()})\n{'='*70}")
     print(f"  env: {num_players} players, blinds {env_cfg['small_blind']}/{env_cfg['big_blind']}")
@@ -252,7 +259,7 @@ def train_one_generation(
 
     agent.model.learn(
         total_timesteps=train_cfg["total_timesteps"],
-        callback=[save_callback, metrics_callback, profit_callback],
+        callback=[save_callback, metrics_callback, profit_callback, critic_callback],
     )
 
     final_model_path = os.path.join(model_dir, "final_model")
