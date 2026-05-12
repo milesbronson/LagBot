@@ -262,6 +262,59 @@ _(to be filled in after fix)_
 | Run | Date | Status | Notes |
 |---|---|---|---|
 | Initial | 2026-05-10 | 8 fail / 3 pass | T1-T8 fail as expected. T9 passes — bug exists but my scenario doesn't trip it (preflop_actions length check accidentally guards the path). T13, T14 sanity pass. |
+| Post-fix | 2026-05-10 | 11/11 pass | All adversarial tests fixed via `_analyze_preflop_action_sequence` + `_analyze_flop_action_sequence` rewrite plus env `_calculate_player_positions` fix. |
+| Coverage | 2026-05-10 | +20 pass | Added `tests/test_env/test_opponent_tracker_coverage.py` — happy-path tests for every metric (C-1..C-17b). Acts as regression guard on top of the adversarial suite. |
+
+---
+
+## Why 11 adversarial tests isn't the full coverage story
+
+The bug-tests file (`test_opponent_tracker_bugs.py`) contains 11 tests, all
+*adversarial* — each one was written to witness a specific defect from the
+audit. They are not exhaustive coverage. Coverage of the happy path lives
+elsewhere:
+
+- `test_opponent_tracker.py` — 20 pre-existing tests covering profile init,
+  action recording, hand history, position tracking, stack ratios, and
+  player-type classification.
+- `test_env_opponent_tracker_integration.py` — 27 tests covering env↔tracker
+  integration (observation shape, action conversion, multi-hand
+  accumulation, the `track_opponents` flag).
+- `test_opponent_tracker_coverage.py` — **20 new tests** (added 2026-05-10)
+  giving each tracked metric at least one dedicated positive-path test.
+
+Total tracker coverage: **78 tests** (20 + 27 + 11 + 20).
+
+---
+
+## Coverage-suite tests (test_opponent_tracker_coverage.py)
+
+These are positive-path regression tests, one (or more) per metric. They
+complement the adversarial bug tests above: bug tests prove specific
+defects don't recur; coverage tests prove the happy-path math still works.
+
+| ID | Metric | Scenario | Asserts |
+|---|---|---|---|
+| C-1 | VPIP | Fold/Call/Raise across 3 hands | `vpip == 2/3` for caller+raiser |
+| C-2 | PFR | Raise×2, Call, Fold across 4 hands | `pfr == 0.5`, `vpip == 0.75` |
+| C-3 | AF | 2 raises + 1 call | `af == 2.0` |
+| C-4 | Confidence | 150 hands | `confidence == 1.0` (capped) |
+| C-5 | hands_played | Player sits out a hand | Increments only when they acted |
+| C-6 | 3-bet opportunity | Open-raise then fold | Opener: 0 opp; callers/folders: 1 opp |
+| C-7 | 3-bet frequency | 3 hands, 1 actual 3-bet | `three_bet_frequency == 1/3` |
+| C-8 | Squeeze | Raise → call → re-raise | `squeeze_attempts == 1` |
+| C-9 | Fold-to-3bet-after-raise | A raises → B 3-bets → A folds | A: `fold_to_3bet_after_raise_percent == 1.0` |
+| C-9b | (negative) | A raises → B 3-bets → A calls | A: faced but didn't fold |
+| C-10 | C-bet made | Aggressor opens flop with bet | `flop_cbet_percent == 1.0` |
+| C-10b | C-bet missed | Aggressor checks flop | Opp counted, made not counted |
+| C-11 | Fold-to-cbet | Caller folds to aggressor's bet | `fold_to_flop_cbet_percent == 1.0` |
+| C-12 | WTSD | Both reach showdown after check-down | Both: `went_to_showdown == 1` |
+| C-13 | W$SD | 2 showdowns, each player wins 1 | Each: `win_at_showdown_percent == 0.5` |
+| C-14 | WWSF | 2 hands seeing flop, each wins 1 | `wwsf_percent == 0.5` (incl. non-showdown wins) |
+| C-15 | Observation layout | Manually-pinned profile | 12 features in expected order |
+| C-16 | Neutral defaults | Unknown player in slot | Defaults `[0.3, 0.2, 0.33, 0.1, 0.5, 0.5, 0.2, 0.4, 0.4, 0.5, 0.05, 0.0]` |
+| C-17 | Zero padding | Empty slots | All zeros |
+| C-17b | Feature clipping | Out-of-range raw values | Clipped to 1.0 (except confidence trailer) |
 
 ---
 

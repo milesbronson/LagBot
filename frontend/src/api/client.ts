@@ -41,6 +41,11 @@ export async function getOpponentStats(sessionId: string, playerId: number): Pro
   return response.data;
 }
 
+export async function getHandHistory(sessionId: string, limit: number = 20): Promise<any> {
+  const response = await client.get(`/game/${sessionId}/hand-history`, { params: { limit } });
+  return response.data;
+}
+
 export async function deleteGame(sessionId: string): Promise<void> {
   await client.delete(`/game/${sessionId}`);
 }

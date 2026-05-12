@@ -1,7 +1,6 @@
 import React from 'react';
 import { GameState } from '../../types/game';
 import { formatCurrency } from '../../utils/formatting';
-import { useGameStore } from '../../stores/gameStore';
 
 interface HandResultModalProps {
   gameState: GameState;
@@ -41,12 +40,12 @@ export const HandResultModal: React.FC<HandResultModalProps> = ({
               className="bg-gray-700 rounded p-4 text-white"
             >
               <div className="font-bold text-lg">{player?.name}</div>
-              <div className="text-green-400">
+              <div className="text-green-400 text-lg">
                 Won {formatCurrency(amount)}
               </div>
               {player?.hole_cards && (
-                <div className="text-sm mt-2">
-                  Cards: {player.hole_cards.join(', ')}
+                <div className="text-sm mt-2 text-gray-300">
+                  {player.hole_cards.join(' ')}
                 </div>
               )}
             </div>

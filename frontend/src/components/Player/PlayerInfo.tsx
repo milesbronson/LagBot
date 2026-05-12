@@ -4,10 +4,33 @@ import { formatCurrency } from '../../utils/formatting';
 
 interface PlayerInfoProps {
   player: Player;
+  compact?: boolean;
   className?: string;
 }
 
-export const PlayerInfo: React.FC<PlayerInfoProps> = ({ player, className = '' }) => {
+export const PlayerInfo: React.FC<PlayerInfoProps> = ({ player, compact = false, className = '' }) => {
+  if (compact) {
+    return (
+      <div
+        className={`
+          bg-gray-800 text-white rounded px-2 py-1 min-w-[100px]
+          border ${player.is_active ? 'border-yellow-400' : 'border-gray-600'}
+          ${className}
+        `}
+      >
+        <div className="flex items-center justify-between gap-1">
+          <span className="font-bold text-xs truncate">{player.name}</span>
+          {player.is_dealer && (
+            <span className="bg-yellow-500 text-black px-1 rounded-full text-[10px] font-bold">D</span>
+          )}
+        </div>
+        <div className="text-xs font-semibold">{formatCurrency(player.stack)}</div>
+        {player.is_all_in && <div className="text-[10px] text-red-400 font-bold">ALL-IN</div>}
+        {player.is_folded && <div className="text-[10px] text-gray-500 font-bold">FOLDED</div>}
+      </div>
+    );
+  }
+
   return (
     <div
       className={`
@@ -20,9 +43,7 @@ export const PlayerInfo: React.FC<PlayerInfoProps> = ({ player, className = '' }
         <div className="flex items-center justify-between">
           <span className="font-bold text-sm">{player.name}</span>
           {player.is_dealer && (
-            <span className="bg-yellow-500 text-black px-2 py-0.5 rounded-full text-xs font-bold">
-              D
-            </span>
+            <span className="bg-yellow-500 text-black px-2 py-0.5 rounded-full text-xs font-bold">D</span>
           )}
         </div>
 
@@ -30,15 +51,6 @@ export const PlayerInfo: React.FC<PlayerInfoProps> = ({ player, className = '' }
           <span className="text-gray-400">Stack: </span>
           <span className="font-semibold">{formatCurrency(player.stack)}</span>
         </div>
-
-        {player.bet > 0 && (
-          <div className="text-sm">
-            <span className="text-gray-400">Bet: </span>
-            <span className="font-semibold text-yellow-400">
-              {formatCurrency(player.bet)}
-            </span>
-          </div>
-        )}
 
         {player.is_all_in && (
           <div className="text-xs text-red-400 font-bold">ALL-IN</div>

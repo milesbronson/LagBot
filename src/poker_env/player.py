@@ -2,7 +2,10 @@
 Player class representing a poker player at the table
 """
 
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.agents.base_agent import BaseAgent
 
 
 class Player:
@@ -31,7 +34,18 @@ class Player:
         self.is_sitting_out = False  # Temporarily not playing
         self.starting_stack_this_hand = stack
         self.total_winnings = 0
-        
+        self.agent: Optional["BaseAgent"] = None
+
+    def seat_agent(self, agent: "BaseAgent") -> None:
+        """Bidirectionally link this player to an agent.
+
+        After seating, agent.player_id == self.player_id and
+        self.agent is the agent. Either side can be looked up from the other,
+        eliminating the index-math glue in training wrappers and renderers.
+        """
+        self.agent = agent
+        agent.player_id = self.player_id
+
     def deal_hand(self, cards: List[int]):
         """Deal hole cards to the player"""
         self.hand = cards

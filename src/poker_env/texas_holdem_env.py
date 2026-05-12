@@ -30,7 +30,7 @@ class TexasHoldemEnv(gym.Env):
     
     # Opponent tracking constants
     MAX_OPPONENTS = 9
-    FEATURES_PER_OPPONENT = 8  # VPIP, PFR, AF, 3bet%, cbet%, fold_to_cbet%, showdown%, confidence
+    FEATURES_PER_OPPONENT = 12  # VPIP, PFR, AF, 3bet%, cbet%, fold_to_cbet%, wtsd%, w$sd%, wwsf%, fold_to_3bet_after_raise%, squeeze%, confidence
     
     def __init__(
         self,
@@ -44,7 +44,8 @@ class TexasHoldemEnv(gym.Env):
         raise_bins: Optional[List[float]] = None,
         include_all_in: bool = True,
         reset_stacks_every_n_timesteps: Optional[int] = None,
-        track_opponents: bool = True
+        track_opponents: bool = True,
+        learning_agent_id: int = 0
     ):
         """
         Args:
@@ -84,20 +85,24 @@ class TexasHoldemEnv(gym.Env):
         num_all_in = 1 if include_all_in else 0
         self.action_space = spaces.Discrete(2 + num_raise_actions + num_all_in)
         
-        # Observation space: base (53) + opponent stats (72 if tracking)
+        # Observation space: base (53) + opponent stats (108 if tracking)
         # Cards: 7 cards × 6 dims = 42 (rank_norm + 4 suit onehot + present)
         # Hand features: 3 dims (hand_strength, pot_odds, spr)
         # Game state: 8 dims (stack, pot, bet, call, active, pos, rnd, btn)
         # Total base: 42 + 3 + 8 = 53
         base_obs_size = 7 * 6 + 3 + 8  # 53
-        opponent_obs_size = self.MAX_OPPONENTS * self.FEATURES_PER_OPPONENT if track_opponents else 0  # 9 × 8 = 72
-        obs_size = base_obs_size + opponent_obs_size  # 53 + 72 = 125 total
+        opponent_obs_size = self.MAX_OPPONENTS * self.FEATURES_PER_OPPONENT if track_opponents else 0  # 9 × 12 = 108
+        obs_size = base_obs_size + opponent_obs_size  # 53 + 108 = 161 total
 
         self.observation_space = spaces.Box(
             low=0, high=np.inf, shape=(obs_size,), dtype=np.float32
         )
 
-        self.learning_agent_id = 0
+        if not 0 <= learning_agent_id < num_players:
+            raise ValueError(
+                f"learning_agent_id={learning_agent_id} must be in [0, {num_players})"
+            )
+        self.learning_agent_id = learning_agent_id
         self.opponent_tracker = OpponentTracker(max_history_hands=1000)
         self.player_positions = {}
 
@@ -178,6 +183,21 @@ class TexasHoldemEnv(gym.Env):
 
     def _execute_step(self, action_int: int, raise_amount: Optional[int]) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Internal step execution shared by step() and step_with_amount()."""
+        # Guard: stepping after the hand is already complete must not re-run
+        # game logic (which would re-distribute the pot and silently create
+        # chips). Caller is responsible for invoking reset() to start the
+        # next hand. See working_docs/bug_report_2026-05-11.md PROD-1.
+        if self.game_state.is_hand_complete():
+            self.timesteps_since_reset += 1
+            self.total_timesteps += 1
+            return (
+                self._get_observation(),
+                0.0,
+                True,
+                False,
+                {'action': 'noop', 'hand_complete': True, 'raise_bins': self.raise_bins},
+            )
+
         current_player = self.game_state.get_current_player()
         starting_stack = current_player.starting_stack_this_hand
 

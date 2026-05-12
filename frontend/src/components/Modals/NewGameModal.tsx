@@ -1,6 +1,30 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 
+const STORAGE_KEY = 'lagbot-game-settings';
+
+interface GameSettings {
+  numOpponents: number;
+  opponentType: string;
+  startingStack: number;
+  smallBlind: number;
+  bigBlind: number;
+}
+
+function loadSettings(): GameSettings {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {
+    // ignore
+  }
+  return { numOpponents: 2, opponentType: 'trained', startingStack: 1000, smallBlind: 5, bigBlind: 10 };
+}
+
+function saveSettings(settings: GameSettings) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+}
+
 interface NewGameModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -8,16 +32,18 @@ interface NewGameModalProps {
 
 export const NewGameModal: React.FC<NewGameModalProps> = ({ isOpen, onClose }) => {
   const { createNewGame, isLoading } = useGameStore();
-  const [numOpponents, setNumOpponents] = useState(2);
-  const [opponentType, setOpponentType] = useState('trained');
-  const [startingStack, setStartingStack] = useState(1000);
-  const [smallBlind, setSmallBlind] = useState(5);
-  const [bigBlind, setBigBlind] = useState(10);
+  const defaults = loadSettings();
+  const [numOpponents, setNumOpponents] = useState(defaults.numOpponents);
+  const [opponentType, setOpponentType] = useState(defaults.opponentType);
+  const [startingStack, setStartingStack] = useState(defaults.startingStack);
+  const [smallBlind, setSmallBlind] = useState(defaults.smallBlind);
+  const [bigBlind, setBigBlind] = useState(defaults.bigBlind);
 
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    saveSettings({ numOpponents, opponentType, startingStack, smallBlind, bigBlind });
     await createNewGame({
       num_opponents: numOpponents,
       opponent_type: opponentType,

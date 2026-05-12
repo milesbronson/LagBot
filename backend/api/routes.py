@@ -29,8 +29,7 @@ async def create_game(request: NewGameRequest):
             big_blind=request.big_blind
         )
 
-        # Start first hand
-        state = session.start_hand()
+        state = await session.start_hand()
 
         return {
             "session_id": session.session_id,
@@ -82,7 +81,7 @@ async def start_new_hand(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        state = session.start_hand()
+        state = await session.start_hand()
         return state
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -143,17 +142,28 @@ async def get_opponent_stats(session_id: str, player_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/game/{session_id}/hand-history")
+async def get_hand_history(session_id: str, limit: int = 20):
+    try:
+        from backend.db.hand_history import get_session_hands
+        hands = await get_session_hands(session_id, limit)
+        return {"hands": hands}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/hand-history")
+async def get_all_hand_history(limit: int = 50):
+    try:
+        from backend.db.hand_history import get_all_hands
+        hands = await get_all_hands(limit)
+        return {"hands": hands}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/game/{session_id}")
 async def delete_game(session_id: str):
-    """
-    Delete a game session.
-
-    Args:
-        session_id: Session identifier
-
-    Returns:
-        Success message
-    """
     session = game_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

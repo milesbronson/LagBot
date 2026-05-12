@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useGameStore } from './stores/gameStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { PokerTable } from './components/PokerTable/PokerTable';

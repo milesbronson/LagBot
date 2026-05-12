@@ -1,18 +1,15 @@
-# Default configuration for Texas Hold'em RL Bot
+# Default configuration for Texas Hold'em RL bot
 
-# Environment settings
-# aggressive_config.yaml
 environment:
-  num_players: 6
+  num_players: 3
   starting_stack: 1000
   small_blind: 5
   big_blind: 10
-  min_raise_multiplier: 2.0  # 2x big blind rule
+  min_raise_multiplier: 2.0
   rake_enabled: false
   rake_percent: 0.0
   rake_cap: 0
-  reset_stacks_every_n_timesteps: 3000  # ← One line!
-
+  reset_stacks_every_n_timesteps: 3000
 
 training:
   total_timesteps: 1000000
@@ -26,24 +23,37 @@ training:
   ent_coef: 0.05
   vf_coef: 0.5
   max_grad_norm: 0.5
-  
-# PPO settings
+
+# Opponent sampling — drives OpponentSampler.
+# strategy: latest | random | weighted_recency | fixed
+# kind: filter sampler pool by AgentCard.kind (e.g. "ppo")
+# fixed_ids: explicit ids when strategy="fixed"
+opponents:
+  strategy: latest
+  kind: null
+  fixed_ids: []
+
+# Continuous training. Set generations > 1 to chain runs; each next
+# generation resumes from the just-registered card.
+# resume_from: an AgentCard.id from models/registry.json, or null for fresh.
+continuation:
+  resume_from: null
+  generations: 1
+
+# EvalGate gating — head-to-head shootout vs. resume parent.
+# When enabled and a parent exists, training output is NOT registered
+# unless mbb/100 >= threshold.
+eval_gate:
+  enabled: false
+  num_hands: 1000
+  threshold_mbb_per_100: 0.0
+  seed: 0
+
 ppo:
   policy: "MlpPolicy"
   verbose: 1
   tensorboard_log: "./logs/"
-  
-# Self-play settings
-self_play:
-  opponent_pool_size: 5  # Number of past agent versions to keep
-  update_frequency: 10000  # Update opponent pool every N steps
-  
-# Evaluation settings
-evaluation:
-  eval_frequency: 10000
-  n_eval_episodes: 100
-  
-# Logging
+
 logging:
   log_dir: "./logs/"
   save_frequency: 50000

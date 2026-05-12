@@ -3,7 +3,12 @@ Base agent class for poker players
 """
 
 from abc import ABC, abstractmethod
+from typing import Optional, TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    from src.poker_env.player import Player
 
 
 class BaseAgent(ABC):
@@ -21,7 +26,12 @@ class BaseAgent(ABC):
         self.name = name
         self.hands_played = 0
         self.total_winnings = 0
-        
+        self.player_id: Optional[int] = None
+
+    def seat(self, player: "Player") -> None:
+        """Bind this agent to a specific seat. Mirror of Player.seat_agent."""
+        player.seat_agent(self)
+
     @abstractmethod
     def select_action(self, observation: np.ndarray, valid_actions: list) -> int:
         """

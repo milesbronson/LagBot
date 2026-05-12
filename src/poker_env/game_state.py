@@ -246,6 +246,7 @@ class GameState:
             min_raise_multiplier,
             raise_bins
         )
+        self.pot_manager.bind_players(self.players)
         self.hand_evaluator = HandEvaluator()
         
         self.deck: List[int] = []

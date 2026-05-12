@@ -330,21 +330,24 @@ class TestPotDistribution:
             2: 2    # Middle
         }
         
+        p2_stack_before = players[2].stack
         winnings = pot_manager.distribute_pots(players, hand_ranks)
-        
+
         print(f"\nMulti-way pot distribution:")
         print(f"  Player 0 winnings: {winnings[0]}")
         print(f"  Player 1 winnings: {winnings[1]}")
         print(f"  Player 2 winnings: {winnings[2]}")
         print(f"  Total distributed: {sum(winnings.values())}")
-        
-        # Main pot (300) goes to P0
-        # Side pot (200) goes to P0
-        # Side pot (100) goes to P2
-        assert winnings[0] == 300, f"P0 should win 500, got {winnings[0]}"
+
+        # PROD-3 fix: P2's 100-chip excess over P1 is uncalled, refunded to
+        # P2's stack before distribution. After refund: P0=100, P1=200, P2=200.
+        # Main pot (300) goes to P0; side pot (200, eligible P1/P2) goes to P2.
+        assert winnings[0] == 300, f"P0 should win 300, got {winnings[0]}"
         assert winnings[1] == 0, f"P1 should win 0, got {winnings[1]}"
-        assert winnings[2] == 300, f"P2 should win 100, got {winnings[2]}"
-        assert sum(winnings.values()) == 600, "Total winnings must equal total bets"
+        assert winnings[2] == 200, f"P2 should win 200, got {winnings[2]}"
+        assert sum(winnings.values()) == 500, "Distributed pot total after refund"
+        # The 100-chip refund is applied directly to P2's stack.
+        assert players[2].stack == p2_stack_before + 100, "P2 refund of 100"
     
     def test_distribute_split_pot_main_and_side(self):
         """
@@ -377,19 +380,23 @@ class TestPotDistribution:
             2: 3    # Worst
         }
         
+        p2_stack_before = players[2].stack
         winnings = pot_manager.distribute_pots(players, hand_ranks)
-        
+
         print(f"\nSplit pot distribution:")
         print(f"  Player 0: {winnings[0]}")
         print(f"  Player 1: {winnings[1]}")
         print(f"  Player 2: {winnings[2]}")
-        
-        # Main pot (300): P0 and P1 tie, each gets 150
-        # Side pot (200): P1 has better rank than P2, P1 gets 200
+
+        # PROD-3 fix: P2's 100-chip excess over P1 is refunded before
+        # distribution. After refund: P0=100, P1=200, P2=200.
+        # Main pot (300): P0 and P1 tie, 150 each.
+        # Side pot (200, eligible P1/P2): P1 wins (rank 1 vs 3).
         assert winnings[0] == 150, f"P0 should win 150, got {winnings[0]}"
         assert winnings[1] == 350, f"P1 should win 350, got {winnings[1]}"
-        assert winnings[2] == 100, f"P2 should win 0, got {winnings[2]}"
-        assert sum(winnings.values()) == 600
+        assert winnings[2] == 0, f"P2 should win 0 (refund handles excess), got {winnings[2]}"
+        assert sum(winnings.values()) == 500
+        assert players[2].stack == p2_stack_before + 100, "P2 refund of 100"
 
 class TestAllInCurrentBetFix:
     """Test suite for all-in current_bet updates"""
@@ -405,223 +412,100 @@ class TestAllInCurrentBetFix:
         )
     
     def test_all_in_as_raise_updates_current_bet(self, game):
-        """
-        Scenario 1: Player goes all-in with a RAISE
-        
-        Expected: current_bet should be updated to the all-in amount
+        """Scenario 1: Player goes all-in with a RAISE.
+
+        In a 3-player hand after the first button rotation, the actor
+        first-to-act is the player after the BB (UTG). Use
+        get_current_player() rather than hard-coding P0.
         """
         game.start_new_hand()
-        
-        # Setup: 3 players, blinds posted
-        # P0 (SB): $5 bet
-        # P1 (BB): $10 bet
-        # P2: no bet yet
-        # current_bet = 10
-        
-        print("\n" + "="*80)
-        print("TEST 1: All-In as RAISE (actual_bet > to_call)")
-        print("="*80)
-        
-        # Player 0 goes all-in for $995 (raises from $5 bet)
-        p0 = game.players[0]
-        p0_starting_stack = p0.stack
-        
-        print(f"\nBefore P0 all-in:")
-        print(f"  P0: stack={p0.stack}, current_bet={p0.current_bet}")
-        print(f"  P1: stack={game.players[1].stack}, current_bet={game.players[1].current_bet}")
-        print(f"  pot_manager.current_bet = {game.pot_manager.current_bet}")
-        
-        # P0 raises all-in
-        game.execute_action(2, raise_amount=995)  # Raise 995 more
-        
-        print(f"\nAfter P0 all-in:")
-        print(f"  P0: stack={p0.stack}, current_bet={p0.current_bet}, is_all_in={p0.is_all_in}")
-        print(f"  pot_manager.current_bet = {game.pot_manager.current_bet}")
-        
-        # ASSERTION 1: current_bet should be updated
-        assert game.pot_manager.current_bet == p0.current_bet, \
-            f"current_bet ({game.pot_manager.current_bet}) should equal P0.current_bet ({p0.current_bet})"
-        
-        # ASSERTION 2: Player 0 should be all-in
-        assert p0.is_all_in, "P0 should be all-in"
-        
-        # ASSERTION 3: Betting round should NOT be complete (P1 and P2 haven't acted)
-        assert not game.is_betting_round_complete(), \
-            "Betting round should NOT be complete - P1 and P2 haven't acted"
-        
-        # ASSERTION 4: Current player should be P1
-        assert game.current_player_idx == 1, \
-            f"Current player should be 1, got {game.current_player_idx}"
-        
-        print(f"\n✓ TEST 1 PASSED: current_bet updated to {game.pot_manager.current_bet}")
+
+        actor = game.get_current_player()
+        actor_starting_stack = actor.stack
+        # Total bet for an all-in raise = actor's existing current_bet + stack.
+        total_bet = actor.current_bet + actor_starting_stack
+        game.execute_action(2, raise_amount=total_bet)
+
+        assert actor.is_all_in, "Actor should be all-in"
+        assert actor.stack == 0
+        assert game.pot_manager.current_bet == actor.current_bet, (
+            f"current_bet ({game.pot_manager.current_bet}) should equal "
+            f"actor.current_bet ({actor.current_bet}) after an all-in raise"
+        )
+        # Other players still haven't acted.
+        assert not game.is_betting_round_complete()
     
     def test_all_in_as_call_does_not_update_current_bet(self, game):
-        """
-        Scenario 2: Player goes all-in with a CALL (exact amount)
-        
-        Expected: current_bet should NOT be updated (already at correct value)
+        """Scenario 2: Player goes all-in with a CALL (exact amount).
+
+        Set the first-to-act player's stack equal to the BB so calling
+        their last chip is an all-in. current_bet must NOT change.
         """
         game.start_new_hand()
-        
-        print("\n" + "="*80)
-        print("TEST 2: All-In as CALL (actual_bet == to_call)")
-        print("="*80)
-        
-        # First, advance betting round to avoid blind complications
-        # Everyone calls preflop
-        game.execute_action(1)  # P0 calls BB (10)
-        game.execute_action(1)  # P1 calls
-        game.execute_action(1)  # P2 calls
-        
-        # Move to flop
-        assert game.is_betting_round_complete()
-        game.advance_betting_round()
-        
-        print(f"\nOn flop, starting conditions:")
-        print(f"  current_bet reset to 0")
-        print(f"  P1 to act (first after button)")
-        
-        # Now we're on flop with fresh betting
-        # P0 checks (current_bet = 0, no change)
-        game.execute_action(1)  # Check
-        
-        # P1 bets 50
-        game.execute_action(2, raise_amount=50)  # Raise 50
-        p1 = game.players[1]
-        p1_bet_amount = p1.current_bet
-        
-        print(f"\nP1 bets {p1_bet_amount}")
-        print(f"  pot_manager.current_bet = {game.pot_manager.current_bet}")
-        
-        # P2 goes all-in for exactly 50 (has only 50 chips or chooses to match)
-        p2 = game.players[2]
-        p2_starting_stack = p2.stack
-        
-        # Set P2 to have only 50 chips for this test
-        p2.stack = 50
-        
+
+        actor = game.get_current_player()
+        actor.stack = game.pot_manager.current_bet - actor.current_bet
         current_bet_before = game.pot_manager.current_bet
-        
-        print(f"\nP2 goes all-in for {p2.stack}")
-        game.execute_action(2, raise_amount=p2.stack)  # All-in for 50
-        
-        print(f"\nAfter P2 all-in:")
-        print(f"  P2: stack={p2.stack}, current_bet={p2.current_bet}, is_all_in={p2.is_all_in}")
-        print(f"  pot_manager.current_bet = {game.pot_manager.current_bet}")
-        
-        # ASSERTION 1: current_bet should NOT change (P2 matched P1's bet)
-        assert game.pot_manager.current_bet == current_bet_before, \
-            f"current_bet should not change: was {current_bet_before}, is {game.pot_manager.current_bet}"
-        
-        # ASSERTION 2: P2 should be all-in
-        assert p2.is_all_in, "P2 should be all-in"
-        
-        # ASSERTION 3: Betting round should NOT be complete (P0 and P1 haven't matched new bet yet)
-        # Actually, P2 matched, so P1 should respond
-        print(f"\n✓ TEST 2 PASSED: current_bet unchanged at {game.pot_manager.current_bet}")
+
+        game.execute_action(1)  # call
+
+        assert actor.is_all_in, "Actor should be all-in after calling with last chips"
+        assert game.pot_manager.current_bet == current_bet_before, (
+            f"current_bet should not change on a call-sized all-in: "
+            f"was {current_bet_before}, is {game.pot_manager.current_bet}"
+        )
     
-    def test_all_in_short_stack_folds(self, game):
-        """
-        Scenario 3: Player tries to go all-in but stack < to_call
-        
-        Expected: Player should fold (caught by early check)
+    def test_all_in_short_stack_goes_all_in(self, game):
+        """Scenario 3: Player has stack < to_call.
+
+        Real poker rule: player goes all-in for their remaining stack (this
+        does not reopen action for previous raisers). The original test
+        expected a FOLD, which is incorrect. Verifies the all-in branch in
+        place_bet handles stack < to_call correctly.
         """
         game.start_new_hand()
-        
-        print("\n" + "="*80)
-        print("TEST 3: All-In Short Stack (amount < to_call) → FOLD")
-        print("="*80)
-        
-        # Setup: Someone bets high amount
-        # P0 (SB) needs to call
-        p0 = game.players[0]
-        
-        # Give P0 only 3 chips (less than BB of 10)
-        p0.stack = 3
-        
-        current_bet = game.pot_manager.current_bet  # Should be 10 (BB)
-        to_call = current_bet - p0.current_bet
-        
-        print(f"\nSetup for P0 action:")
-        print(f"  P0 stack: {p0.stack}")
-        print(f"  current_bet: {current_bet}")
-        print(f"  P0.current_bet: {p0.current_bet}")
-        print(f"  to_call: {to_call}")
-        print(f"  P0 needs ${to_call} but only has ${p0.stack}")
-        
-        # P0 tries to go all-in for 3 (less than to_call)
-        print(f"\nP0 tries to go all-in for remaining {p0.stack}...")
-        game.execute_action(2, raise_amount=p0.stack)  # All-in for 3
-        
-        print(f"\nAfter P0 action:")
-        print(f"  P0: is_active={p0.is_active}, is_all_in={p0.is_all_in}")
-        
-        # ASSERTION 1: P0 should be FOLDED (not active)
-        assert not p0.is_active, \
-            "P0 should be folded (inactive) because bet < to_call"
-        
-        # ASSERTION 2: P0 should NOT be all-in (folded instead)
-        assert not p0.is_all_in, \
-            "P0 should not be all-in; they folded"
-        
-        # ASSERTION 3: Current player should move to P1
-        assert game.current_player_idx == 1, \
-            "Current player should advance to P1 after P0 folds"
-        
-        print(f"\n✓ TEST 3 PASSED: P0 folded (amount < to_call)")
+
+        actor = game.get_current_player()
+        actor.stack = 3  # less than the BB call
+        to_call = game.pot_manager.current_bet - actor.current_bet
+        assert to_call > actor.stack, "Setup: stack must be less than to_call"
+
+        game.execute_action(2, raise_amount=actor.current_bet + actor.stack)
+
+        assert actor.is_all_in, "Actor should be all-in, not folded"
+        assert actor.is_active, "All-in player remains active (can still win)"
+        assert actor.stack == 0
     
     def test_three_player_all_in_sequence(self, game):
-        """
-        Integration test: 3-player all-in sequence
-        
-        Tests that logic works correctly when multiple players go all-in
+        """Integration: 3-player all-in sequence using actual current player
+        each step (the original test confused position assignments).
         """
         game.start_new_hand()
-        
-        print("\n" + "="*80)
-        print("TEST 4: 3-Player All-In Sequence")
-        print("="*80)
-        
-        p0, p1, p2 = game.players[0], game.players[1], game.players[2]
-        
-        print(f"\nInitial state:")
-        print(f"  P0 (SB): current_bet={p0.current_bet}")
-        print(f"  P1 (BB): current_bet={p1.current_bet}")
-        print(f"  P2: current_bet={p2.current_bet}")
-        print(f"  current_bet={game.pot_manager.current_bet}")
-        
-        # P0 raises to 50
-        print(f"\n1. P1 raises to 50")
-        game.execute_action(2, raise_amount=50)  # 45 more + 5 blind = 50
+
+        # Step 1: UTG raises to 50 total.
+        utg = game.get_current_player()
+        game.execute_action(2, raise_amount=50)
         assert game.pot_manager.current_bet == 50
-        print(f"   ✓ current_bet = 50")
-        
-        # P1 goes all-in for 200 (re-raise)
-        print(f"\n2. P2 goes all-in for ~990 total")
-        game.execute_action(2, raise_amount=980)  # Raise 980 more
-        assert game.pot_manager.current_bet == p1.current_bet
-        assert p1.is_all_in
-        print(f"   ✓ P1 all-in, current_bet = {game.pot_manager.current_bet}")
-        
-        # P2 calls the all-in
-        print(f"\n3. P2 calls P1's all-in")
-        game.execute_action(1)  # Call
-        assert game.pot_manager.current_bet == p1.current_bet
-        print(f"   ✓ P2 called, current_bet unchanged = {game.pot_manager.current_bet}")
-        
-        # P0 also calls
-        print(f"\n4. P0 calls P1's all-in")
-        game.execute_action(1)  # Call
-        assert game.pot_manager.current_bet == p1.current_bet
-        print(f"   ✓ P0 called, current_bet unchanged = {game.pot_manager.current_bet}")
-        
-        # Now betting round should be complete (all acted and matched)
-        print(f"\n5. Betting round should be complete")
+        assert utg.current_bet == 50
+
+        # Step 2: next actor goes all-in. raise_amount is TOTAL bet.
+        actor2 = game.get_current_player()
+        all_in_total = actor2.current_bet + actor2.stack
+        game.execute_action(2, raise_amount=all_in_total)
+        assert actor2.is_all_in
+        assert game.pot_manager.current_bet == actor2.current_bet
+
+        # Step 3: third actor calls the all-in.
+        actor3 = game.get_current_player()
+        game.execute_action(1)
+        assert game.pot_manager.current_bet == actor2.current_bet, (
+            "Calling an all-in should not move current_bet"
+        )
+
+        # Step 4: UTG (who raised to 50) must respond to the bigger all-in.
+        game.execute_action(1)  # call
+
         assert game.is_betting_round_complete()
-        print(f"   ✓ Betting round complete")
-        
-        print(f"\n✓ TEST 4 PASSED: 3-player all-in sequence works correctly")
-        game_state.display_hand_history()
 
 
 
@@ -718,23 +602,40 @@ class TestCompleteHandScenarios:
         assert total_in_pots == pot_manager.pots[0].amount, \
             f"Pots don't add up: {total_in_pots} != {pot_manager.pots[0].amount}"
         print()
-        # Key assertion: There should only be ONE pot since both are all-in at same level
-        assert len(pots) == 1, f"Should have 1 pot, got {len(pots)}"
-        
+        # calculate_side_pots is pure — it produces the layered structure
+        # without applying the uncalled-bet refund. The 2-pot structure here
+        # reflects P0 over-betting (850 unmatched). distribute_pots will then
+        # refund the 850 to P0 and produce a single contested pot.
+        assert len(pots) == 2, f"Should have 2 pots (matched + uncontested), got {len(pots)}"
+        assert pots[0].amount == 300 and set(pots[0].eligible_players) == {0, 1}
+        assert pots[1].amount == 850 and pots[1].eligible_players == [0]
+
+        # Capture chip totals before distribution to verify conservation.
+        chips_before = players[0].stack + players[1].stack + pot_manager.pots[0].amount
+
         # Distribute to a winner (player 0 wins)
         hand_ranks = {0: 100, 1: 200}
         winnings = pot_manager.distribute_pots(players, hand_ranks)
-        
+
         print(f"\nWinnings:")
-        print(f"  P0: {winnings[0]}")
+        print(f"  P0: {winnings[0]} (matched-pot winnings)")
         print(f"  P1: {winnings[1]}")
-        
-        # CRITICAL ASSERTION: One player gets ALL the pot
-        assert (winnings[0] == 0 or winnings[1] == 0), \
-            "One player must have 0 winnings - pot cannot be split to both!"
-        assert winnings[0] + winnings[1] == total_in_pots, \
-            f"Total winnings must equal pot: {winnings[0] + winnings[1]} != {total_in_pots}"
-        assert winnings[0] > 0, "Player 0 should win since hand rank 100 < 200"
+        print(f"  P0 stack after refund: {players[0].stack}")
+
+        # PROD-3 fix: P0's 850-chip over-bet is refunded directly to P0's stack
+        # before distribute_pots calculates winnings. So winnings shows only the
+        # matched 300-chip pot; the 850 lives in P0's stack as a refund.
+        assert winnings[0] == 300, "Player 0 wins the contested 300 pot"
+        assert winnings[1] == 0, "Player 1 wins nothing"
+        # P0's stack started at 0 (all-in) and got the 850 refund applied
+        # during distribute_pots.
+        assert players[0].stack == 850, f"P0 stack should be 850 after refund, got {players[0].stack}"
+
+        # Chip conservation: refund + winnings + remaining stacks == chips_before
+        total_to_p0 = players[0].stack + winnings[0]  # 850 refund + 300 winnings
+        total_to_p1 = players[1].stack + winnings[1]
+        assert total_to_p0 + total_to_p1 == chips_before, \
+            f"Chip conservation violated: {total_to_p0 + total_to_p1} != {chips_before}"
 
 
 if __name__ == "__main__":

@@ -36,8 +36,10 @@ class ScenarioTreeEnv(gym.Wrapper):
         
         # Opponent tracking
         self.opponent_tracker = OpponentTracker()
-        self.learning_agent_id = 0  # Assume learning agent is player 0
-        self.opponent_id = 1
+        # Mirror the wrapped env's learning seat — falls back to 0 if the wrapped
+        # env doesn't expose one (e.g. a non-TexasHoldemEnv).
+        self.learning_agent_id = getattr(env, 'learning_agent_id', 0)
+        self.opponent_id = 1 if self.learning_agent_id == 0 else 0
     
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """

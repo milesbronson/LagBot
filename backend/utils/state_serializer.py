@@ -2,42 +2,41 @@
 Utilities for serializing game state to JSON format.
 """
 from typing import Dict, List, Optional
-from src.poker_env.texas_holdem_env import TexasHoldemEnv
 from src.poker_env.game_state import GameState, Player, BettingRound
 from backend.utils.card_converter import convert_cards_for_frontend
 
 
 def serialize_player(player: Player, is_human: bool, show_hole_cards: bool = False) -> Dict:
-    """
-    Serialize player data for frontend.
-
-    Args:
-        player: Player object
-        is_human: Whether this is the human player
-        show_hole_cards: Whether to reveal hole cards (showdown or human player)
-
-    Returns:
-        Dictionary with player data
-    """
     hole_cards = None
     if show_hole_cards or is_human:
-        if player.hole_cards and len(player.hole_cards) == 2:
-            hole_cards = convert_cards_for_frontend(player.hole_cards)
+        if player.hand and len(player.hand) == 2:
+            hole_cards = convert_cards_for_frontend(player.hand)
 
     return {
         "player_id": player.player_id,
-        "name": f"Player {player.player_id}" if not is_human else "You",
+        "name": "You" if is_human else player.name,
         "stack": player.stack,
-        "bet": player.bet,
+        "bet": player.current_bet,
         "is_active": player.is_active,
         "is_all_in": player.is_all_in,
-        "is_folded": player.folded,
+        "is_folded": not player.is_active and not player.is_all_in,
         "hole_cards": hole_cards,
         "is_human": is_human,
-        "is_dealer": False,  # Set by caller
-        "is_small_blind": False,  # Set by caller
-        "is_big_blind": False,  # Set by caller
+        "is_dealer": False,
+        "is_small_blind": False,
+        "is_big_blind": False,
     }
+
+
+def _get_position_indices(game_state: GameState):
+    num_players = len(game_state.players)
+    dealer_idx = game_state.button_position
+    sb_idx = (dealer_idx + 1) % num_players
+    bb_idx = (dealer_idx + 2) % num_players
+    if num_players == 2:
+        sb_idx = dealer_idx
+        bb_idx = (dealer_idx + 1) % num_players
+    return dealer_idx, sb_idx, bb_idx
 
 
 def serialize_game_state(
@@ -47,49 +46,33 @@ def serialize_game_state(
     hand_complete: bool = False,
     winner_info: Optional[Dict] = None
 ) -> Dict:
-    """
-    Serialize complete game state for frontend.
-
-    Args:
-        game_state: Current game state
-        human_player_id: ID of human player
-        valid_actions: List of valid action IDs
-        hand_complete: Whether hand is complete
-        winner_info: Winner information for showdown
-
-    Returns:
-        Dictionary with complete game state
-    """
-    # Convert community cards
     community_cards = []
     if game_state.community_cards:
         community_cards = convert_cards_for_frontend(game_state.community_cards)
 
-    # Serialize players
+    dealer_idx, sb_idx, bb_idx = _get_position_indices(game_state)
+
     players = []
     for player in game_state.players:
         is_human = player.player_id == human_player_id
         show_cards = hand_complete or is_human
         player_data = serialize_player(player, is_human, show_cards)
 
-        # Add position markers
-        player_data["is_dealer"] = player.player_id == game_state.dealer_idx
-        player_data["is_small_blind"] = player.player_id == game_state.small_blind_idx
-        player_data["is_big_blind"] = player.player_id == game_state.big_blind_idx
+        player_data["is_dealer"] = player.player_id == dealer_idx
+        player_data["is_small_blind"] = player.player_id == sb_idx
+        player_data["is_big_blind"] = player.player_id == bb_idx
 
         players.append(player_data)
 
-    # Get pot info
     pot_total = game_state.pot_manager.get_pot_total()
     current_bet = game_state.pot_manager.current_bet
     min_raise = game_state.pot_manager.min_raise
 
-    # Determine if it's human's turn
+    human_player = game_state.players[human_player_id]
     is_human_turn = (
         not hand_complete and
         game_state.current_player_idx == human_player_id and
-        game_state.players[human_player_id].is_active and
-        not game_state.players[human_player_id].folded
+        human_player.is_active
     )
 
     return {

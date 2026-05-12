@@ -21,11 +21,16 @@ class MetricsCallback(BaseCallback):
         self.episode_wins = 0
         self.episode_count = 0
         self.last_logged_step = 0
+        # Cached after _on_training_start: action-bucket indices read off
+        # the env's actual action space so we don't hard-code 6-action
+        # layout. Populated lazily because env isn't bound yet at __init__.
+        self._action_buckets = None
             
 
     def set_model(self, model) -> None:
-        """Set the model attribute - required by BaseCallback"""
-        super().set_model(model)
+        """Bind the SB3 model. BaseCallback exposes `self.model` as a simple
+        attribute (no setter), so plain assignment is the correct hook."""
+        self.model = model
 
     def _on_step(self) -> bool:
         """Called at each step"""
@@ -48,33 +53,29 @@ class MetricsCallback(BaseCallback):
         else:
             self.current_episode_reward += float(rewards) if rewards is not None else 0
 
-        # Track episode completion
+        # Track episode completion. Prefer SB3 Monitor's `info['episode']['r']`
+        # (authoritative episode return) when present; fall back to the
+        # local accumulator only when there's no Monitor wrapper. Doing both
+        # used to double-count every completed episode.
         for i, info in enumerate(infos):
             if isinstance(dones, np.ndarray):
                 done = dones[i] if i < len(dones) else False
             else:
                 done = dones if i == 0 else False
 
-            if done:
-                # Episode finished, record reward
-                self.episode_rewards.append(self.current_episode_reward)
-                self.episode_count += 1
-
-                # Check if agent won (positive reward typically indicates win)
-                if self.current_episode_reward > 0:
-                    self.episode_wins += 1
-
-                # Reset for next episode
-                self.current_episode_reward = 0
-
-            # Handle info dict if present
             if 'episode' in info:
                 episode_reward = info['episode'].get('r', 0)
-                if episode_reward != 0:
-                    self.episode_rewards.append(episode_reward)
-                    self.episode_count += 1
-                    if episode_reward > 0:
-                        self.episode_wins += 1
+                self.episode_rewards.append(episode_reward)
+                self.episode_count += 1
+                if episode_reward > 0:
+                    self.episode_wins += 1
+                self.current_episode_reward = 0
+            elif done:
+                self.episode_rewards.append(self.current_episode_reward)
+                self.episode_count += 1
+                if self.current_episode_reward > 0:
+                    self.episode_wins += 1
+                self.current_episode_reward = 0
 
         # Log periodically
         if self.num_timesteps - self.last_logged_step >= self.log_freq:
@@ -91,6 +92,43 @@ class MetricsCallback(BaseCallback):
         self.episode_wins = 0
         self.episode_count = 0
         self.last_logged_step = 0
+        self._action_buckets = self._resolve_action_buckets()
+
+    def _resolve_action_buckets(self):
+        """Read the env's actual action layout off the SB3 model. Falls
+        back to the historical 3-bin + all-in layout if the env can't
+        be unwrapped (e.g. when a test passes a Mock model)."""
+        default_layout = {
+            "fold": [0],
+            "call": [1],
+            "raise": [2, 3, 4],
+            "all_in": [5],
+        }
+        try:
+            env = self.model.get_env() if hasattr(self.model, "get_env") else None
+            unwrapped = env
+            for attr in ("envs", "env"):
+                inner = getattr(unwrapped, attr, None)
+                if inner is None:
+                    continue
+                unwrapped = inner[0] if isinstance(inner, (list, tuple)) else inner
+            while hasattr(unwrapped, "env") and not hasattr(unwrapped, "raise_bins"):
+                unwrapped = unwrapped.env
+
+            raise_bins = getattr(unwrapped, "raise_bins", None)
+            include_all_in = getattr(unwrapped, "include_all_in", True)
+            if not isinstance(raise_bins, list):
+                return default_layout
+            raise_indices = list(range(2, 2 + len(raise_bins)))
+            all_in_idx = 2 + len(raise_bins) if include_all_in else None
+            return {
+                "fold": [0],
+                "call": [1],
+                "raise": raise_indices,
+                "all_in": [all_in_idx] if all_in_idx is not None else [],
+            }
+        except Exception:
+            return default_layout
 
     def _on_training_end(self) -> None:
         """Called at training end"""
@@ -119,10 +157,16 @@ class MetricsCallback(BaseCallback):
 
         if self.episode_actions:
             total_actions = len(self.episode_actions)
-            fold_count = self.episode_actions.count(0)  # Fold is action 0
-            call_count = self.episode_actions.count(1)  # Call is action 1
-            raise_count = sum(1 for a in self.episode_actions if a in [2, 3, 4])  # Raise actions
-            all_in_count = self.episode_actions.count(5)  # All-in is action 5
+            buckets = self._action_buckets or self._resolve_action_buckets()
+            fold_set = set(buckets["fold"])
+            call_set = set(buckets["call"])
+            raise_set = set(buckets["raise"])
+            all_in_set = set(buckets["all_in"])
+
+            fold_count = sum(1 for a in self.episode_actions if a in fold_set)
+            call_count = sum(1 for a in self.episode_actions if a in call_set)
+            raise_count = sum(1 for a in self.episode_actions if a in raise_set)
+            all_in_count = sum(1 for a in self.episode_actions if a in all_in_set)
 
             fold_rate = fold_count / total_actions
             call_rate = call_count / total_actions
@@ -216,8 +260,9 @@ class SimpleMetricsCallback(BaseCallback):
         self.last_logged_step = 0
 
     def set_model(self, model) -> None:
-        """Set the model attribute - required by BaseCallback"""
-        super().set_model(model)
+        """Bind the SB3 model. BaseCallback exposes `self.model` as a simple
+        attribute (no setter), so plain assignment is the correct hook."""
+        self.model = model
 
     def _on_step(self) -> bool:
         """Called at each step"""

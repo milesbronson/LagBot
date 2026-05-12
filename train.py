@@ -1,495 +1,325 @@
 """
-Training script for PPO poker agent with opponent evolution.
+train.py — single entrypoint for training PPO poker agents.
 
-Trains main PPO agent against:
-- The last trained model (if available)
-- The second-to-last trained model (if available)  
-- Or CallAgent and RandomAgent as fallback
+The training loop, in order:
+1. Loads a YAML config.
+2. Opens the AgentRegistry at models/registry.json.
+3. Seeds rule-based fixtures (CallAgent, RandomAgent) into the registry
+   on first run so the sampler always has a non-empty pool.
+4. Samples opponents via OpponentSampler using the config-driven
+   strategy (latest / random / weighted_recency / fixed).
+5. Builds TexasHoldemEnv with num_players from config.
+6. Optionally loads weights from a previously registered checkpoint
+   (``continuation.resume_from``).
+7. Trains the learner inside OpponentAutoPlayWrapper for
+   ``training.total_timesteps`` steps.
+8. Saves the final checkpoint.
+9. If an eval gate is configured, plays a heads-up shootout against the
+   resume parent. Skip registration if the gate fails.
+10. On success, folds OpponentProfitTracker totals into the registry's
+    matchup_history and registers a new AgentCard.
 
-No MultiAgentWrapper class - opponents are handled inline in OpponentAutoPlayWrapper.
+Repeat for ``continuation.generations`` cycles; each next generation
+resumes from the just-registered card.
 """
 
 import argparse
-import yaml
 import os
 from datetime import datetime
-from pathlib import Path
-from typing import List, Tuple, Optional
-import gymnasium as gym
+from typing import List, Optional, Tuple
 
-from src.poker_env.texas_holdem_env import TexasHoldemEnv
+import yaml
+
+from src.agents.opponent_ppo import OpponentPPO
 from src.agents.ppo_agent import PPOAgent, TrainingCallback
 from src.agents.random_agent import CallAgent, RandomAgent
-from src.agents.opponent_ppo import OpponentPPO
-from src.training.metrics import TrainingMetrics
+from src.poker_env.texas_holdem_env import TexasHoldemEnv
+from src.training.agent_card import AgentCard
+from src.training.agent_registry import AgentRegistry
 from src.training.callbacks import MetricsCallback, OpponentProfitCallback
+from src.training.eval_gate import EvalGate
+from src.training.metrics import TrainingMetrics
+from src.training.opponent_autoplay_wrapper import OpponentAutoPlayWrapper
 from src.training.opponent_profit_tracker import OpponentProfitTracker
+from src.training.opponent_sampler import OpponentSampler
 
 
-# ============================================================================
-# OPPONENT AUTO-PLAY WRAPPER - Handles opponent loop inline
-# ============================================================================
+CALL_FIXTURE_ID = "rule_call_v0"
+RANDOM_FIXTURE_ID = "rule_random_v0"
 
-class OpponentAutoPlayWrapper(gym.Env):
-    """
-    Wraps TexasHoldemEnv to automatically play opponent moves.
-    
-    This wrapper:
-    1. Takes learning agent's action
-    2. Automatically plays all opponents until main agent's turn
-    3. Returns observation to learning agent
-    
-    Compatible with SB3's API.
-    """
-    
-    def __init__(self, env: TexasHoldemEnv, opponents_list: List[Tuple[str, object]],
-                 profit_tracker: Optional[OpponentProfitTracker] = None):
-        """
-        Args:
-            env: TexasHoldemEnv instance
-            opponents_list: List of (opponent_type, agent) tuples
-                           opponent_type: str (e.g., 'call', 'random', 'ppo_gen_1')
-                           agent: Agent instance with select_action(obs) -> int method
-            profit_tracker: Optional tracker for per-opponent profits
-        """
-        super().__init__()
-        self.env = env
-        self.opponents = opponents_list
-        self.profit_tracker = profit_tracker
-
-        # Track starting stack for profit calculation
-        self.hand_starting_stack = None
-
-        # Expose environment properties for SB3
-        self.observation_space = env.observation_space
-        self.action_space = env.action_space
-        self.metadata = env.metadata
-    
-    def reset(self, **kwargs):
-        """Reset environment and return initial observation"""
-        obs, info = self.env.reset(**kwargs)
-
-        # Record starting stack for profit tracking
-        if self.profit_tracker:
-            try:
-                if self.env.game_state and self.env.game_state.players:
-                    learning_agent = self.env.game_state.players[0]
-                    self.hand_starting_stack = learning_agent.starting_stack_this_hand
-            except Exception as e:
-                print(f"Warning: Failed to record starting stack: {e}")
-                self.hand_starting_stack = None
-
-        return obs, info
-    
-    def step(self, action: int) -> Tuple:
-        """
-        Execute learning agent action and auto-play opponents.
-        
-        CRITICAL FLOW:
-        1. Learning agent (player 0) takes action
-        2. Environment executes action, records in tracker
-        3. Loop plays all opponents (players 1, 2) until:
-           - Main agent's turn comes up again (current_player_idx == 0)
-           - Hand ends (terminated or truncated)
-        4. Return observation with updated opponent stats
-        
-        This is where opponents interact with the environment!
-        """
-        
-        # Step 1: Learning agent acts
-        obs, reward, terminated, truncated, info = self.env.step(action)
-
-        # CRITICAL FIX: Always get reward for player 0 when hand ends
-        if terminated or truncated:
-            learning_agent = self.env.game_state.players[0]
-            agent_starting_stack = learning_agent.starting_stack_this_hand
-            reward = (learning_agent.stack - agent_starting_stack) / self.env.starting_stack
-
-            # Track profit against each opponent (do this BEFORE the opponent loop check)
-            self._record_opponent_profits(learning_agent)
-
-        # Step 2: Automatically play all opponents until main agent's turn or hand ends
-        while not (terminated or truncated) and self.env.game_state.current_player_idx != 0:
-
-            # Get current player index (should be 1 or 2)
-            current_idx = self.env.game_state.current_player_idx
-            opponent_idx = current_idx - 1  # opponent index in self.opponents list
-
-            # Safety check
-            if opponent_idx < len(self.opponents):
-                opponent_type, opponent = self.opponents[opponent_idx]
-
-                # ← OPPONENTS GET 68-DIM OBSERVATION WITH OPPONENT STATS
-                opponent_action = opponent.select_action(obs)
-
-                # ← OPPONENT AFFECTS ENVIRONMENT (chips move, stats recorded, etc.)
-                obs, opp_reward, terminated, truncated, info = self.env.step(opponent_action)
-
-                # CRITICAL FIX: If hand ended during opponent's turn, get learning agent's reward
-                if terminated or truncated:
-                    # Hand ended - calculate reward for learning agent (player 0)
-                    learning_agent = self.env.game_state.players[0]
-                    agent_starting_stack = learning_agent.starting_stack_this_hand
-                    reward = (learning_agent.stack - agent_starting_stack) / self.env.starting_stack
-
-                    # Track profit against each opponent
-                    self._record_opponent_profits(learning_agent)
-            else:
-                break
-
-        return obs, reward, terminated, truncated, info
-    
-    def render(self, *args, **kwargs):
-        """Render the environment"""
-        return self.env.render(*args, **kwargs)
-    
-    def close(self):
-        """Close the environment"""
-        return self.env.close()
-
-    def _record_opponent_profits(self, learning_agent):
-        """Record profit/loss against each opponent for this hand"""
-        if not self.profit_tracker:
-            return
-
-        if self.hand_starting_stack is None:
-            return
-
-        try:
-            total_profit = (learning_agent.stack - self.hand_starting_stack) / self.env.starting_stack
-
-            # In a 3-player game, we play against 2 opponents simultaneously
-            # Approximate per-opponent profit by dividing total profit equally
-            # (More sophisticated attribution could be added later)
-            per_opponent_profit = total_profit / len(self.opponents)
-
-            for opp_idx, (opponent_type, opponent) in enumerate(self.opponents):
-                opponent_id = opp_idx + 1  # Player IDs: 0=agent, 1=opp1, 2=opp2
-                opponent_name = getattr(opponent, 'name', f'Opponent_{opponent_id}')
-
-                # Register opponent if first time seeing them
-                if opponent_id not in self.profit_tracker.opponent_types:
-                    self.profit_tracker.register_opponent(
-                        opponent_id=opponent_id,
-                        name=opponent_name,
-                        opponent_type=opponent_type
-                    )
-
-                # Record the result
-                self.profit_tracker.record_hand_result(
-                    opponent_id=opponent_id,
-                    profit=per_opponent_profit
-                )
-        except Exception as e:
-            # Log but don't crash training
-            print(f"Warning: Failed to record opponent profit: {e}")
-
-
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
 
 def load_config(config_path: str) -> dict:
-    """Load YAML configuration file"""
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    return config
+    with open(config_path) as f:
+        return yaml.safe_load(f)
 
 
-def find_latest_models(models_dir: str = "models", count: int = 2) -> List[Optional[str]]:
-    """
-    Find the most recent trained models by modification time.
-    
-    Args:
-        models_dir: Directory containing trained models
-        count: Number of models to find (typically 2)
-    
-    Returns:
-        List of model paths [latest, second_latest, ...], None for missing slots
-        
-    Example:
-        ['/path/to/gen_2/final_model.zip', '/path/to/gen_1/final_model.zip']
-    """
-    models_path = Path(models_dir)
-    
-    if not models_path.exists():
-        return [None] * count
-    
-    # Find all final_model.zip files with their modification times
-    model_files = []
-    for model_zip in models_path.glob("*/final_model.zip"):
-        model_files.append({
-            'path': str(model_zip),
-            'mtime': model_zip.stat().st_mtime,
-            'dir': model_zip.parent.name
-        })
-    
-    if not model_files:
-        return [None] * count
-    
-    # Sort by modification time (newest first)
-    model_files.sort(key=lambda x: x['mtime'], reverse=True)
-    
-    # Build result list
-    result = []
-    for i in range(count):
-        if i < len(model_files):
-            result.append(model_files[i]['path'])
-        else:
-            result.append(None)
-    
-    return result
+def _instantiate_opponent(card: AgentCard):
+    """Build a BaseAgent for use as an opponent from a registry card."""
+    if card.kind == "ppo":
+        agent = OpponentPPO(card.path, name=card.name)
+        if not agent.is_loaded():
+            raise RuntimeError(f"could not load PPO checkpoint from {card.path!r}")
+        return agent
+    if card.kind == "call":
+        return CallAgent(name=card.name)
+    if card.kind == "random":
+        return RandomAgent(name=card.name)
+    raise ValueError(f"unknown agent kind {card.kind!r}")
 
 
-def create_opponents(models_dir: str = "models") -> List[Tuple[str, object]]:
-    """
-    Create opponent list for training.
-    
-    Strategy:
-    - If 2+ models found: Use last 2 models
-    - If 1 model found: Use it + CallAgent
-    - If 0 models found: Use CallAgent + RandomAgent
-    
-    Args:
-        models_dir: Directory containing trained models
-    
-    Returns:
-        List of (opponent_type_str, agent_object) tuples
-    """
-    opponents = []
-    latest_models = find_latest_models(models_dir, count=2)
-    
-    print("\n" + "="*70)
-    print("OPPONENT SELECTION")
-    print("="*70)
-    
-    models_loaded = 0
-    
-    # Try to load previous generation models
-    for i, model_path in enumerate(latest_models):
-        if model_path is not None:
-            try:
-                opponent = OpponentPPO(model_path)
-                if opponent.is_loaded():
-                    model_name = Path(model_path).parent.name
-                    print(f"✓ Loaded opponent {i+1}: {model_name}")
-                    opponents.append((f"ppo_{model_name}", opponent))
-                    models_loaded += 1
-                else:
-                    print(f"✗ Failed to load opponent from {model_path}")
-            except Exception as e:
-                print(f"✗ Error loading opponent from {model_path}: {e}")
-    
-    # Fill remaining slots with CallAgent and RandomAgent
-    if models_loaded == 0:
-        print("\nNo trained models found. Using default opponents:")
-        call_agent = CallAgent(name="CallAgent")
-        random_agent = RandomAgent(name="RandomAgent")
-        
-        opponents = [
-            ('call', call_agent),
-            ('random', random_agent)
-        ]
-        
-        print(f"✓ Using CallAgent")
-        print(f"✓ Using RandomAgent")
-    
-    elif models_loaded == 1:
-        print("\nOnly one model found. Adding CallAgent:")
-        call_agent = CallAgent(name="CallAgent")
-        opponents.append(('call', call_agent))
-        print(f"✓ Added CallAgent")
-    
-    print("="*70)
-    
-    return opponents
+def _ensure_fixture_cards(registry: AgentRegistry) -> None:
+    """First-run seeding: CallAgent + RandomAgent always available."""
+    if registry.get(CALL_FIXTURE_ID) is None:
+        registry.register(AgentCard(
+            id=CALL_FIXTURE_ID, name="CallAgent", kind="call",
+        ))
+    if registry.get(RANDOM_FIXTURE_ID) is None:
+        registry.register(AgentCard(
+            id=RANDOM_FIXTURE_ID, name="RandomAgent", kind="random",
+        ))
 
 
-# ============================================================================
-# MAIN TRAINING FUNCTION
-# ============================================================================
-
-def train(config_path: str, run_name: str = None):
-    """Train PPO agent against evolving opponents"""
-    
-    config = load_config(config_path)
-    
-    if run_name is None:
-        run_name = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    
-    print("="*70)
-    print(f"Training PPO Poker Agent: {run_name}")
-    print("="*70)
-    print(f"Configuration: {config_path}")
-    print()
-    
-    # =========================================================================
-    # ENVIRONMENT SETUP
-    # =========================================================================
-    
-    env_config = config['environment']
-    env = TexasHoldemEnv(
-        num_players=3,
-        starting_stack=env_config['starting_stack'],
-        small_blind=env_config['small_blind'],
-        big_blind=env_config['big_blind'],
-        rake_percent=env_config['rake_percent'] if env_config['rake_enabled'] else 0.0,
-        rake_cap=env_config.get('rake_cap', 0),
-        min_raise_multiplier=env_config.get('min_raise_multiplier', 1.0),
-        reset_stacks_every_n_timesteps=env_config.get('reset_stacks_every_n_timesteps'),
-        track_opponents=True  # ← CRITICAL: Enable opponent tracking!
+def select_opponent_cards(
+    registry: AgentRegistry,
+    opponents_cfg: dict,
+    num_needed: int,
+    exclude_self_id: Optional[str],
+) -> List[AgentCard]:
+    sampler = OpponentSampler(registry)
+    exclude = [exclude_self_id] if exclude_self_id else None
+    cards = sampler.sample(
+        n=num_needed,
+        strategy=opponents_cfg.get("strategy", "latest"),
+        kind=opponents_cfg.get("kind"),
+        exclude_ids=exclude,
+        ids=opponents_cfg.get("fixed_ids"),
     )
-    
-    print(f"Environment: 3 players")
-    print(f"  Starting stack: ${env_config['starting_stack']}")
-    print(f"  Blinds: ${env_config['small_blind']}/${env_config['big_blind']}")
-    print(f"  Opponent tracking: Enabled")
-    print(f"  Observation space: {env.observation_space.shape}")  # Should be (68,)
-    print()
-    
-    # =========================================================================
-    # OPPONENT SETUP
-    # =========================================================================
-    
-    opponents = create_opponents(models_dir="models")
-    
-    print(f"\nOpponents:")
-    for i, (opponent_type, opponent) in enumerate(opponents, 1):
-        print(f"  Player {i}: {opponent_type} - {opponent.name}")
-    print()
-    
-    # =========================================================================
-    # METRICS & LOGGING
-    # =========================================================================
+    # Pad with rule fixtures if the registry pool was too small.
+    while len(cards) < num_needed:
+        fallback = registry.get(CALL_FIXTURE_ID) if len(cards) % 2 == 0 \
+            else registry.get(RANDOM_FIXTURE_ID)
+        cards.append(fallback)
+    return cards
+
+
+def _build_env(env_cfg: dict) -> TexasHoldemEnv:
+    return TexasHoldemEnv(
+        num_players=env_cfg["num_players"],
+        starting_stack=env_cfg["starting_stack"],
+        small_blind=env_cfg["small_blind"],
+        big_blind=env_cfg["big_blind"],
+        rake_percent=env_cfg["rake_percent"] if env_cfg.get("rake_enabled") else 0.0,
+        rake_cap=env_cfg.get("rake_cap", 0),
+        min_raise_multiplier=env_cfg.get("min_raise_multiplier", 1.0),
+        reset_stacks_every_n_timesteps=env_cfg.get("reset_stacks_every_n_timesteps"),
+        track_opponents=True,
+    )
+
+
+def _run_eval_gate(
+    env_cfg: dict,
+    eval_cfg: dict,
+    final_model_path: str,
+    parent_card: AgentCard,
+) -> Tuple[bool, dict]:
+    candidate = OpponentPPO(final_model_path + ".zip", name="candidate")
+    predecessor = _instantiate_opponent(parent_card)
+    gate = EvalGate(
+        num_hands=eval_cfg.get("num_hands", 1000),
+        threshold_mbb_per_100=eval_cfg.get("threshold_mbb_per_100", 0.0),
+        starting_stack=env_cfg["starting_stack"],
+        small_blind=env_cfg["small_blind"],
+        big_blind=env_cfg["big_blind"],
+        seed=eval_cfg.get("seed", 0),
+    )
+    result = gate.evaluate(
+        candidate, predecessor,
+        candidate_id="candidate", predecessor_id=parent_card.id,
+    )
+    return gate.passes(result), result.to_dict()
+
+
+def _fold_profits_into_registry(
+    registry: AgentRegistry,
+    learner_card_id: str,
+    profit_tracker: OpponentProfitTracker,
+    seat_to_card: dict,
+    timestep: int,
+) -> None:
+    for seat_id, opponent_card in seat_to_card.items():
+        stats = profit_tracker.opponent_results.get(seat_id)
+        if not stats or stats["hands_played"] == 0:
+            continue
+        # Don't dump matchup history onto rule fixtures' cards — they're
+        # generic and would accumulate noise from every run forever. For
+        # rule fixtures we log behaviour stats only if/when added later;
+        # for ppo opponents we write per-observer matchup history.
+        if opponent_card.kind != "ppo":
+            continue
+        registry.update_matchup(
+            observer_id=learner_card_id,
+            opponent_id=opponent_card.id,
+            hands=stats["hands_played"],
+            profit=stats["total_profit"],
+            timestep=timestep,
+        )
+
+
+def train_one_generation(
+    config: dict,
+    run_name: str,
+    registry: AgentRegistry,
+) -> Optional[AgentCard]:
+    env_cfg = config["environment"]
+    train_cfg = config["training"]
+    opp_cfg = config.get("opponents", {})
+    cont_cfg = config.get("continuation", {})
+    eval_cfg = config.get("eval_gate", {})
+    log_cfg = config["logging"]
+
+    num_players = env_cfg["num_players"]
+    if not 2 <= num_players <= 10:
+        raise ValueError(f"num_players must be between 2 and 10, got {num_players}")
+
+    _ensure_fixture_cards(registry)
+
+    resume_from_id = cont_cfg.get("resume_from")
+    parent_card = registry.get(resume_from_id) if resume_from_id else None
+    if resume_from_id and parent_card is None:
+        raise KeyError(f"continuation.resume_from {resume_from_id!r} not in registry")
+
+    opponent_cards = select_opponent_cards(
+        registry, opp_cfg,
+        num_needed=num_players - 1,
+        exclude_self_id=resume_from_id,
+    )
+    opponents = [(c.kind, _instantiate_opponent(c)) for c in opponent_cards]
+
+    env = _build_env(env_cfg)
+
+    log_dir = os.path.join(log_cfg["log_dir"], run_name)
+    model_dir = os.path.join(log_cfg["model_dir"], run_name)
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
 
     metrics = TrainingMetrics(run_name, save_dir="metrics")
     profit_tracker = OpponentProfitTracker(run_name, save_dir="metrics")
 
-    training_config = config['training']
-    log_dir = os.path.join(config['logging']['log_dir'], run_name)
-    model_dir = os.path.join(config['logging']['model_dir'], run_name)
+    non_learner_ids = [
+        p.player_id for p in env.game_state.players
+        if p.player_id != env.learning_agent_id
+    ]
+    seat_to_card = dict(zip(non_learner_ids, opponent_cards))
 
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(model_dir, exist_ok=True)
-
-    print(f"Metrics: metrics/{run_name}/")
-    print(f"Logs: {log_dir}")
-    print(f"Models: {model_dir}")
-    print(f"Opponent profit tracking: Enabled")
-    print()
-    
-    # =========================================================================
-    # AGENT CREATION
-    # =========================================================================
-
-    # Get policy_kwargs if specified in config
-    policy_kwargs = training_config.get('policy_kwargs', None)
-
+    policy_kwargs = train_cfg.get("policy_kwargs")
     agent = PPOAgent(
         env=env,
         name=f"PPO_{run_name}",
-        learning_rate=training_config['learning_rate'],
-        n_steps=training_config['n_steps'],
-        batch_size=training_config['batch_size'],
-        n_epochs=training_config['n_epochs'],
-        gamma=training_config['gamma'],
-        gae_lambda=training_config['gae_lambda'],
-        clip_range=training_config['clip_range'],
-        ent_coef=training_config.get('ent_coef', 0.01),  # Entropy bonus for exploration
-        vf_coef=training_config.get('vf_coef', 0.5),     # Value function coefficient
-        max_grad_norm=training_config.get('max_grad_norm', 0.5),  # Gradient clipping
+        learning_rate=train_cfg["learning_rate"],
+        n_steps=train_cfg["n_steps"],
+        batch_size=train_cfg["batch_size"],
+        n_epochs=train_cfg["n_epochs"],
+        gamma=train_cfg["gamma"],
+        gae_lambda=train_cfg["gae_lambda"],
+        clip_range=train_cfg["clip_range"],
+        ent_coef=train_cfg.get("ent_coef", 0.01),
+        vf_coef=train_cfg.get("vf_coef", 0.5),
+        max_grad_norm=train_cfg.get("max_grad_norm", 0.5),
         tensorboard_log=log_dir,
-        policy_kwargs=policy_kwargs  # Pass custom architecture if specified
+        policy_kwargs=policy_kwargs,
     )
-    
-    print(f"Agent: {agent.name}")
-    print(f"Learning rate: {training_config['learning_rate']}")
-    print(f"Total timesteps: {training_config['total_timesteps']:,}")
-    if policy_kwargs:
-        print(f"Architecture: {policy_kwargs}")
-    print()
-    
-    # =========================================================================
-    # WRAP ENVIRONMENT WITH OPPONENT AUTO-PLAY
-    # =========================================================================
+
+    if parent_card and parent_card.path:
+        agent.load(parent_card.path)
 
     wrapped_env = OpponentAutoPlayWrapper(env, opponents, profit_tracker=profit_tracker)
-
-    # Set the wrapped environment on the agent's model
     agent.model.set_env(wrapped_env)
-    print(f"✓ Agent set to use wrapped environment with opponent auto-play")
-    print()
 
-    # =========================================================================
-    # CREATE CALLBACKS
-    # =========================================================================
-    
-    save_freq = config['logging']['save_frequency']
     save_callback = TrainingCallback(
-        save_freq=save_freq,
-        save_path=model_dir
+        save_freq=log_cfg["save_frequency"], save_path=model_dir,
     )
-    
-    metrics_callback = MetricsCallback(
-        metrics=metrics,
-        log_freq=10000
-    )
-
+    metrics_callback = MetricsCallback(metrics=metrics, log_freq=10000)
     profit_callback = OpponentProfitCallback(
-        profit_tracker=profit_tracker,
-        checkpoint_freq=10000
+        profit_tracker=profit_tracker, checkpoint_freq=10000,
     )
 
-    # =========================================================================
-    # TRAIN
-    # =========================================================================
-    
-    print("Starting training...")
-    print(f"Tensorboard: tensorboard --logdir {log_dir}")
+    print(f"\n{'='*70}\nTraining {run_name}  (gen {registry.next_generation()})\n{'='*70}")
+    print(f"  env: {num_players} players, blinds {env_cfg['small_blind']}/{env_cfg['big_blind']}")
+    print(f"  opponents: {[c.id for c in opponent_cards]}")
+    print(f"  resume from: {resume_from_id or '(fresh)'}")
+    print(f"  total timesteps: {train_cfg['total_timesteps']:,}")
     print()
-    
+
     agent.model.learn(
-        total_timesteps=training_config['total_timesteps'],
-        callback=[save_callback, metrics_callback, profit_callback]
+        total_timesteps=train_cfg["total_timesteps"],
+        callback=[save_callback, metrics_callback, profit_callback],
     )
-    
-    # =========================================================================
-    # SAVE FINAL MODEL
-    # =========================================================================
-    
+
     final_model_path = os.path.join(model_dir, "final_model")
     agent.save(final_model_path)
-    
-    print()
-    print("="*70)
-    print("Training Complete!")
-    print("="*70)
-    print(f"Model saved to: {final_model_path}")
-    print(f"Tensorboard: tensorboard --logdir {log_dir}")
-    print(f"Metrics: metrics/{run_name}/")
-    print()
+
+    eval_stats: Optional[dict] = None
+    if eval_cfg.get("enabled") and parent_card and parent_card.path:
+        passed, eval_stats = _run_eval_gate(env_cfg, eval_cfg, final_model_path, parent_card)
+        if not passed:
+            print(
+                f"EvalGate FAILED for {run_name}: "
+                f"mbb/100={eval_stats['mbb_per_100']:.2f} "
+                f"< threshold {eval_cfg.get('threshold_mbb_per_100', 0.0)}. "
+                "Skipping registration."
+            )
+            return None
+
+    card = AgentCard(
+        id=run_name,
+        name=run_name,
+        kind="ppo",
+        path=final_model_path + ".zip",
+        generation=registry.next_generation(),
+        parent_id=resume_from_id,
+        trained_against_ids=[c.id for c in opponent_cards],
+        training_config=train_cfg,
+        total_timesteps=train_cfg["total_timesteps"],
+        eval_stats=eval_stats,
+    )
+    registry.register(card)
+
+    _fold_profits_into_registry(
+        registry,
+        learner_card_id=card.id,
+        profit_tracker=profit_tracker,
+        seat_to_card=seat_to_card,
+        timestep=train_cfg["total_timesteps"],
+    )
+
+    print(f"\nRegistered {card.id} (gen {card.generation}, parent={resume_from_id})")
+    return card
 
 
-# ============================================================================
-# MAIN ENTRY POINT
-# ============================================================================
+def train(config_path: str, run_name: Optional[str] = None) -> None:
+    config = load_config(config_path)
+    registry = AgentRegistry()
+
+    cont_cfg = config.get("continuation", {})
+    generations = cont_cfg.get("generations", 1)
+
+    base_name = run_name or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    for gen in range(generations):
+        gen_name = base_name if generations == 1 else f"{base_name}_gen{gen}"
+        card = train_one_generation(config, gen_name, registry)
+        if card and generations > 1:
+            config.setdefault("continuation", {})["resume_from"] = card.id
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Train PPO poker bot against evolving opponents"
+    parser = argparse.ArgumentParser(description="Train PPO poker bot")
+    parser.add_argument(
+        "--config", default="configs/default_config.yaml",
+        help="Path to YAML config",
     )
     parser.add_argument(
-        "--config",
-        type=str,
-        default="configs/default_config.yaml",
-        help="Path to config file"
+        "--name", default=None,
+        help="Custom run name (default: timestamp)",
     )
-    parser.add_argument(
-        "--name",
-        type=str,
-        default=None,
-        help="Custom run name"
-    )
-    
     args = parser.parse_args()
     train(args.config, args.name)

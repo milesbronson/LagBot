@@ -9,6 +9,7 @@ interface PokerTableSeatProps {
   player: Player;
   isCurrentPlayer: boolean;
   position: { x: number; y: number };
+  compact?: boolean;
   className?: string;
 }
 
@@ -16,18 +17,19 @@ export const PokerTableSeat: React.FC<PokerTableSeatProps> = ({
   player,
   isCurrentPlayer,
   position,
+  compact = false,
   className = '',
 }) => {
   return (
     <div
-      className={`absolute ${className}`}
+      className={`absolute z-20 ${className}`}
       style={{
         left: `${position.x}px`,
         top: `${position.y}px`,
         transform: 'translate(-50%, -50%)',
       }}
     >
-      <div className="flex flex-col items-center gap-2">
+      <div className="flex flex-col items-center gap-1">
         {player.is_dealer && <DealerButton />}
 
         <HoleCards
@@ -35,7 +37,7 @@ export const PokerTableSeat: React.FC<PokerTableSeatProps> = ({
           showCards={player.is_human || !player.is_active}
         />
 
-        <PlayerInfo player={player} />
+        <PlayerInfo player={player} compact={compact} />
 
         <PlayerActionIndicator
           player={player}

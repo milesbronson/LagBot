@@ -1,6 +1,7 @@
 import React from 'react';
 import { Player } from '../../types/game';
 import { PlayerStats } from '../Player/PlayerStats';
+import { useGameStore } from '../../stores/gameStore';
 
 interface OpponentStatsProps {
   players: Player[];
@@ -8,6 +9,7 @@ interface OpponentStatsProps {
 }
 
 export const OpponentStats: React.FC<OpponentStatsProps> = ({ players, className = '' }) => {
+  const { opponentStats } = useGameStore();
   const opponents = players.filter((p) => !p.is_human);
 
   return (
@@ -17,10 +19,12 @@ export const OpponentStats: React.FC<OpponentStatsProps> = ({ players, className
         {opponents.map((opponent) => (
           <div key={opponent.player_id} className="border-b border-gray-700 pb-2">
             <div className="text-white font-semibold mb-1">{opponent.name}</div>
-            <PlayerStats stats={null} />
-            <div className="text-xs text-gray-500 mt-1">
-              Stats will accumulate as you play more hands
-            </div>
+            <PlayerStats stats={opponentStats[opponent.player_id] || null} />
+            {!opponentStats[opponent.player_id] && (
+              <div className="text-xs text-gray-500 mt-1">
+                Stats accumulate as you play
+              </div>
+            )}
           </div>
         ))}
       </div>

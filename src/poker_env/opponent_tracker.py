@@ -698,49 +698,25 @@ class OpponentTracker:
         return features
     
     def get_observation_features(self, hero_id: int, opponent_ids: List[int],
-                              max_opponents: int = 9, features_per_opponent: int = 8) -> List[float]:
+                              max_opponents: int = 9, features_per_opponent: int = 12) -> List[float]:
         """
         Get fixed-size opponent features for RL observation space.
 
-        EXPANDED FEATURES: Now includes 8 features per opponent (was 4)
-
         Handles variable player counts by zero-padding missing opponent slots.
-        This ensures a consistent observation space size regardless of:
-        - Table size (2-10 players)
-        - Number of opponents who have folded
-        - Players who joined/left
 
-        Args:
-            hero_id: The learning agent's player ID (excluded from features)
-            opponent_ids: List of opponent player IDs in seat order
-            max_opponents: Maximum opponents to encode (default 9 for 10-player max)
-            features_per_opponent: Features per opponent (now 8: VPIP, PFR, AF, 3bet, cbet, fold_to_cbet, showdown, confidence)
-
-        Returns:
-            List of floats with length = max_opponents * features_per_opponent (72 by default)
-
-        Feature layout per opponent slot (8 features):
-            [0] VPIP (0-1): Voluntarily put money in pot %
-            [1] PFR (0-1): Preflop raise %
-            [2] AF (0-1): Aggression factor / 3.0 (normalized, capped at 1.0)
-            [3] 3-Bet % (0-1): Frequency of 3-betting when facing a raise
-            [4] C-Bet % (0-1): Continuation bet frequency on flop
-            [5] Fold to C-Bet % (0-1): Frequency of folding to continuation bets
-            [6] Went to Showdown % (0-1): How often they go to showdown
-            [7] Confidence (0-1): min(hands_played / 100, 1.0)
-
-        Padding explanation:
-            With variable players (2-10), observation must be fixed size for PPO.
-            Solution: Always allocate 9 opponent slots (max opponents at 10-player table).
-
-            Example with 3 players (hero + 2 opponents):
-            [vpip1, pfr1, af1, 3bet1, cbet1, ftcb1, wtsd1, conf1,  # Opponent 1
-            vpip2, pfr2, af2, 3bet2, cbet2, ftcb2, wtsd2, conf2,  # Opponent 2
-            0, 0, 0, 0, 0, 0, 0, 0,                                # Slot 3 - padded
-            ...                                                     # Slots 4-9 - padded
-            ]
-
-            The neural network learns that zeros indicate "no opponent in this slot".
+        Feature layout per opponent slot (12 features):
+            [0]  VPIP (0-1):                       Voluntarily put money in pot %
+            [1]  PFR (0-1):                        Preflop raise %
+            [2]  AF (0-1):                         Aggression factor / 3.0 (capped)
+            [3]  3-Bet % (0-1):                    3-bet frequency when facing a raise
+            [4]  C-Bet % (0-1):                    Continuation bet frequency on flop
+            [5]  Fold to C-Bet % (0-1):            Fold frequency vs continuation bets
+            [6]  Went to Showdown % (0-1):         WTSD
+            [7]  Win at Showdown % (0-1):          W$SD
+            [8]  Won When Saw Flop % (0-1):        WWSF
+            [9]  Fold to 3-Bet after Raise (0-1):  Fold frequency vs 3-bets after raising
+            [10] Squeeze % (0-1):                  Squeeze attempts vs opportunities
+            [11] Confidence (0-1):                 min(hands_played / 100, 1.0)
         """
         features = []
 
@@ -752,19 +728,22 @@ class OpponentTracker:
                     features.extend([
                         min(opp.vpip, 1.0),
                         min(opp.pfr, 1.0),
-                        min(opp.af / 3.0, 1.0),  # Normalize AF (typical range 0-3)
+                        min(opp.af / 3.0, 1.0),
                         min(opp.three_bet_percent, 1.0),
                         min(opp.cbet_percent, 1.0),
                         min(opp.fold_to_cbet_percent, 1.0),
                         min(opp.went_to_showdown_percent, 1.0),
-                        opp.confidence
+                        min(opp.win_at_showdown_percent, 1.0),
+                        min(opp.wwsf_percent, 1.0),
+                        min(opp.fold_to_3bet_after_raise_percent, 1.0),
+                        min(opp.squeeze_percent, 1.0),
+                        opp.confidence,
                     ])
                 else:
-                    # Opponent in game but not yet tracked (new player)
-                    # Use neutral defaults (middle values for unknown tendencies)
-                    features.extend([0.3, 0.2, 0.33, 0.1, 0.5, 0.5, 0.2, 0.0])
+                    # Opponent in game but not yet tracked (new player).
+                    # Neutral defaults for unknown tendencies.
+                    features.extend([0.3, 0.2, 0.33, 0.1, 0.5, 0.5, 0.2, 0.4, 0.4, 0.5, 0.05, 0.0])
             else:
-                # Zero-pad empty opponent slots
                 features.extend([0.0] * features_per_opponent)
 
         return features

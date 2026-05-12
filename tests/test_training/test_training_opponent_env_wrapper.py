@@ -13,51 +13,10 @@ Tests verify:
 
 import pytest
 import numpy as np
-from typing import List, Tuple
 
 from src.poker_env.texas_holdem_env import TexasHoldemEnv
 from src.agents.random_agent import CallAgent, RandomAgent
-
-
-class OpponentAutoPlayWrapper:
-    """
-    Wrapper for testing - same as train_FINAL.py version.
-    
-    Wraps TexasHoldemEnv to automatically play opponent moves.
-    """
-    
-    def __init__(self, env: TexasHoldemEnv, opponents_list: List[Tuple[str, object]]):
-        self.env = env
-        self.opponents = opponents_list
-        self.observation_space = env.observation_space
-        self.action_space = env.action_space
-    
-    def reset(self, **kwargs):
-        obs, info = self.env.reset(**kwargs)
-        return obs, info
-    
-    def step(self, action: int):
-        obs, reward, terminated, truncated, info = self.env.step(action)
-        
-        # Use current_player_idx directly (not a method)
-        while not (terminated or truncated) and self.env.game_state.current_player_idx != 0:
-            current_idx = self.env.game_state.current_player_idx
-            opponent_idx = current_idx - 1
-            
-            if opponent_idx < len(self.opponents):
-                opponent_type, opponent = self.opponents[opponent_idx]
-                opponent_action = opponent.select_action(obs)
-                obs, _, terminated, truncated, info = self.env.step(opponent_action)
-            else:
-                break
-        
-        return obs, reward, terminated, truncated, info
-    
-    def render(self, *args, **kwargs):
-        return self.env.render(*args, **kwargs)
-    
-    def close(self):
-        return self.env.close()
+from src.training.opponent_autoplay_wrapper import OpponentAutoPlayWrapper
 
 
 class TestOpponentAutoPlayWrapper:
@@ -96,8 +55,7 @@ class TestOpponentAutoPlayWrapper:
     def test_wrapper_exposes_observation_space(self, wrapped_env, env):
         """Test wrapper exposes environment observation space"""
         assert wrapped_env.observation_space == env.observation_space
-        # 72-dim: 32 base + 40 opponent stats
-        assert wrapped_env.observation_space.shape[0] in [68, 72, 94]  # Accept range
+        assert wrapped_env.observation_space.shape == env.observation_space.shape
     
     def test_wrapper_exposes_action_space(self, wrapped_env, env):
         """Test wrapper exposes environment action space"""
@@ -108,7 +66,7 @@ class TestOpponentAutoPlayWrapper:
         """Test reset returns correct observation shape"""
         obs, info = wrapped_env.reset()
         assert isinstance(obs, np.ndarray)
-        assert obs.shape[0] in [68, 72, 94]  # Accept range of obs dims
+        assert obs.shape == wrapped_env.observation_space.shape
         assert obs.dtype == np.float32
     
     def test_wrapper_reset_returns_info(self, wrapped_env):
@@ -120,7 +78,7 @@ class TestOpponentAutoPlayWrapper:
         """Test wrapper can reset multiple times"""
         for _ in range(3):
             obs, info = wrapped_env.reset()
-            assert obs.shape[0] in [68, 72, 94]
+            assert obs.shape == wrapped_env.observation_space.shape
     
     def test_wrapper_step_returns_correct_types(self, wrapped_env):
         """Test step returns correct types"""
@@ -138,14 +96,14 @@ class TestOpponentAutoPlayWrapper:
         wrapped_env.reset()
         obs, _, _, _, _ = wrapped_env.step(1)
         
-        assert obs.shape[0] in [68, 72, 94]
+        assert obs.shape == wrapped_env.observation_space.shape
         assert obs.dtype == np.float32
     
     def test_wrapper_step_with_learning_agent_action(self, wrapped_env):
         """Test step executes learning agent action correctly"""
         wrapped_env.reset()
         obs, reward, terminated, truncated, info = wrapped_env.step(1)
-        assert obs.shape[0] in [68, 72, 94]
+        assert obs.shape == wrapped_env.observation_space.shape
     
     def test_opponents_auto_play_after_learning_agent_act(self, wrapped_env):
         """Test opponents are auto-played after learning agent acts"""
@@ -180,34 +138,36 @@ class TestOpponentAutoPlayWrapper:
     
     def test_callagent_works_with_wrapper(self, env):
         """Test CallAgent works with wrapper"""
-        call_agent = CallAgent()
-        wrapped_env = OpponentAutoPlayWrapper(env, [('call', call_agent)])
-        
+        wrapped_env = OpponentAutoPlayWrapper(
+            env, [('call', CallAgent()), ('call', CallAgent())]
+        )
+
         wrapped_env.reset()
-        
+
         done = False
         for _ in range(50):
             obs, _, terminated, truncated, _ = wrapped_env.step(wrapped_env.action_space.sample())
             if terminated or truncated:
                 done = True
                 break
-        
+
         assert done
-    
+
     def test_randomagent_works_with_wrapper(self, env):
         """Test RandomAgent works with wrapper"""
-        random_agent = RandomAgent()
-        wrapped_env = OpponentAutoPlayWrapper(env, [('random', random_agent)])
-        
+        wrapped_env = OpponentAutoPlayWrapper(
+            env, [('random', RandomAgent()), ('random', RandomAgent())]
+        )
+
         wrapped_env.reset()
-        
+
         done = False
         for _ in range(50):
             obs, _, terminated, truncated, _ = wrapped_env.step(wrapped_env.action_space.sample())
             if terminated or truncated:
                 done = True
                 break
-        
+
         assert done
     
     def test_mixed_opponents_work(self, wrapped_env):
@@ -226,8 +186,8 @@ class TestOpponentAutoPlayWrapper:
     def test_observation_is_valid_shape(self, wrapped_env):
         """Test observation is valid shape"""
         obs, _ = wrapped_env.reset()
-        
-        assert obs.shape[0] in [68, 72, 94]
+
+        assert obs.shape == wrapped_env.observation_space.shape
         assert np.any(obs != 0)
     
     def test_observation_updates_with_actions(self, wrapped_env):
@@ -407,31 +367,15 @@ class TestOpponentAutoPlayWrapper:
             
             assert done, f"Game {game_num} didn't complete"
     
-    def test_wrapper_handles_invalid_opponent_index(self, env):
-        """Test wrapper gracefully handles mismatched opponent count"""
-        one_opponent = [('call', CallAgent())]
-        wrapped_env = OpponentAutoPlayWrapper(env, one_opponent)
-        
-        wrapped_env.reset()
-        
-        done = False
-        for _ in range(50):
-            obs, _, terminated, truncated, _ = wrapped_env.step(wrapped_env.action_space.sample())
-            if terminated or truncated:
-                done = True
-                break
-        
-        assert done
-    
-    def test_wrapper_handles_no_opponents(self, env):
-        """Test wrapper works with empty opponent list"""
-        wrapped_env = OpponentAutoPlayWrapper(env, [])
-        
-        obs, _ = wrapped_env.reset()
-        assert obs.shape[0] in [68, 72, 94]
-        
-        obs, _, _, _, _ = wrapped_env.step(1)
-        assert obs.shape[0] in [68, 72, 94]
+    def test_wrapper_rejects_mismatched_opponent_count(self, env):
+        """Wrapper requires len(opponents) == num_players - 1."""
+        with pytest.raises(ValueError):
+            OpponentAutoPlayWrapper(env, [('call', CallAgent())])
+
+    def test_wrapper_rejects_empty_opponent_list(self, env):
+        """Empty opponent list is invalid unless the env has only the learner."""
+        with pytest.raises(ValueError):
+            OpponentAutoPlayWrapper(env, [])
     
     def test_wrapper_compatible_with_sb3_api(self, wrapped_env):
         """Test wrapper has SB3-compatible API"""
@@ -465,11 +409,11 @@ class TestWrapperBenefits:
     def test_environment_unchanged(self):
         """Test environment can be used without wrapper"""
         env = TexasHoldemEnv(num_players=3, track_opponents=True)
-        
+
         obs, _ = env.reset()
         obs, _, done, _, _ = env.step(1)
-        
-        assert obs.shape[0] in [68, 72, 94]
+
+        assert obs.shape == env.observation_space.shape
     
     def test_wrapper_adds_orchestration_layer(self):
         """Test wrapper adds orchestration without changing environment"""

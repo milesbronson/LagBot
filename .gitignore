@@ -180,3 +180,8 @@ temp/
 # *.pt
 # *.h5
 # *.pb
+
+# Prevent root-level clutter
+/*.png
+/*.html
+/metrics/
