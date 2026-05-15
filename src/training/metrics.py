@@ -75,15 +75,20 @@ class TrainingMetrics:
         self.metrics['episodes'].append(len(episode_rewards))
         
         if episode_rewards:
+            # `episode_rewards` is the current-window slice (episodes that
+            # completed since the previous snapshot). It's the "raw" series
+            # in the dashboard. The trailing-100 smoothed view comes through
+            # agent_stats['avg_reward_100'] instead, set by the callback so
+            # it doesn't degenerate to the same value.
             self.metrics['rewards'].append(float(np.mean(episode_rewards)))
-            last_100 = episode_rewards[-100:] if len(episode_rewards) >= 100 else episode_rewards
-            self.metrics['avg_reward_100'].append(float(np.mean(last_100)))
-        
+
         if agent_stats:
             self.metrics['win_rate'].append(agent_stats.get('win_rate', 0))
             self.metrics['fold_rate'].append(agent_stats.get('fold_rate', 0))
             self.metrics['raise_rate'].append(agent_stats.get('raise_rate', 0))
             self.metrics['all_in_rate'].append(agent_stats.get('all_in_rate', 0))
+            if 'avg_reward_100' in agent_stats:
+                self.metrics['avg_reward_100'].append(float(agent_stats['avg_reward_100']))
         
         if learning_metrics:
             self.metrics['learning_rate'].append(learning_metrics.get('learning_rate', 0))

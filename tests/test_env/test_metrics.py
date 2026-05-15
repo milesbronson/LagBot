@@ -84,21 +84,30 @@ class TestTrainingMetrics:
         assert metrics.metrics['learning_rate'][-1] == 0.0003
     
     def test_record_step_100_episode_average(self, metrics):
-        """Test 100-episode moving average"""
+        """avg_reward_100 is now supplied by the callback (trailing-100
+        smoothed view) and passed in via agent_stats. record_step itself
+        only stores the per-window raw mean in metrics['rewards']."""
         rewards = list(range(50, 150))  # 100 rewards
-        metrics.record_step(timestep=1000, episode_rewards=rewards)
-        
-        # Average should be mean of all 100
         expected_avg = sum(rewards) / len(rewards)
+        metrics.record_step(
+            timestep=1000,
+            episode_rewards=rewards,
+            agent_stats={'avg_reward_100': expected_avg},
+        )
+
         assert metrics.metrics['avg_reward_100'][0] == pytest.approx(expected_avg)
-    
+
     def test_record_step_less_than_100_episodes(self, metrics):
-        """Test average with less than 100 episodes"""
+        """Same contract as the 100-episode case — callback decides what
+        the smoothed value is."""
         rewards = list(range(10, 30))  # 20 rewards
-        metrics.record_step(timestep=1000, episode_rewards=rewards)
-        
-        # Should average all 20
         expected_avg = sum(rewards) / len(rewards)
+        metrics.record_step(
+            timestep=1000,
+            episode_rewards=rewards,
+            agent_stats={'avg_reward_100': expected_avg},
+        )
+
         assert metrics.metrics['avg_reward_100'][0] == pytest.approx(expected_avg)
     
     def test_checkpoint_actions(self, metrics):
@@ -173,16 +182,20 @@ class TestTrainingMetrics:
         assert '0' in saved['distributions'][0]
     
     def test_get_summary(self, metrics):
-        """Test summary generation"""
+        """get_summary returns the empty dict until at least one
+        avg_reward_100 sample is logged (the callback feeds this)."""
         metrics.record_step(
             timestep=1000,
             episode_rewards=[10.0, 20.0, 30.0],
-            agent_stats={'win_rate': 0.4, 'fold_rate': 0.3, 'raise_rate': 0.2},
-            learning_metrics={}
+            agent_stats={
+                'win_rate': 0.4, 'fold_rate': 0.3, 'raise_rate': 0.2,
+                'avg_reward_100': 20.0,
+            },
+            learning_metrics={},
         )
-        
+
         summary = metrics.get_summary()
-        
+
         assert summary['run_name'] == 'test_run'
         assert summary['total_timesteps'] == 1000
         assert summary['current_reward'] == pytest.approx(20.0)

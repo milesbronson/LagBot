@@ -40,7 +40,7 @@ class OpponentPPO(BaseAgent):
         ```
     """
 
-    def __init__(self, model_path: str, name: str = "OpponentPPO", deterministic: bool = False, device: str = "auto"):
+    def __init__(self, model_path: str, name: str = "OpponentPPO", deterministic: bool = False, device: str = "cpu"):
         """
         Load a trained PPO model to use as opponent.
 
@@ -81,25 +81,13 @@ class OpponentPPO(BaseAgent):
             self.model = None
             self.load_success = False
     
-    def select_action(self, observation: np.ndarray) -> int:
-        """
-        Select action using the loaded PPO policy.
-        
-        CRITICAL: This observation should be the SAME observation that the
-        training agent receives, including:
-        - Hole cards
-        - Community cards
-        - Stack sizes
-        - Pot info
-        - Opponent statistics (if included)
-        - Action history (if included)
-        
-        Args:
-            observation: Full game observation (same format as training agent)
-            
-        Returns:
-            Action index (0=fold, 1=call, 2=raise)
-        """
+    def select_action(self, observation: np.ndarray, valid_actions: list = None) -> int:
+        """Select action using the loaded PPO policy.
+
+        `valid_actions` is accepted to match BaseAgent's signature (and the
+        way EvalGate / autoplay loops call every agent uniformly) but is
+        ignored: the PPO policy was trained against the full discrete action
+        space, and the env itself coerces illegal actions on step()."""
         if self.model is None:
             # Fallback: default to call
             return 1

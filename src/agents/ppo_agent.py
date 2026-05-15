@@ -130,12 +130,19 @@ class PPOAgent(BaseAgent):
     
     def load(self, path: str):
         """
-        Load a saved model
-        
-        Args:
-            path: Path to load the model from
+        Load a saved model.
+
+        Preserves the current model's tensorboard_log and env: PPO.load()
+        otherwise inherits the path embedded in the saved file (the
+        original training run's log dir), causing every chained run to
+        write into the ancestor's tensorboard directory instead of its
+        own. Same for env — without rebinding, learn() would step the
+        ancestor's frozen env.
         """
-        self.model = PPO.load(path)
+        tensorboard_log = self.model.tensorboard_log
+        env = self.model.env
+        self.model = PPO.load(path, env=env)
+        self.model.tensorboard_log = tensorboard_log
         print(f"Model loaded from {path}")
     
     @classmethod

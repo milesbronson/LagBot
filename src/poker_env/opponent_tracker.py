@@ -13,10 +13,53 @@ Positions are tracked as integers (0-9) representing seat numbers relative to de
 
 from dataclasses import dataclass, field
 from collections import deque
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from enum import Enum
 import json
 from datetime import datetime
+
+
+# Order matters: must match positions 0..11 in get_observation_features.
+PERSISTED_STAT_KEYS: Tuple[str, ...] = (
+    "vpip",
+    "pfr",
+    "af",
+    "three_bet_percent",
+    "cbet_percent",
+    "fold_to_cbet_percent",
+    "went_to_showdown_percent",
+    "win_at_showdown_percent",
+    "wwsf_percent",
+    "fold_to_3bet_after_raise_percent",
+    "squeeze_percent",
+)
+
+# Fallback values for individual missing prior keys (used when a prior dict
+# exists but doesn't contain every stat). af stored unnormalized; the obs
+# code divides by 3.0 to land in [0, 1].
+NEUTRAL_PRIOR_RATES: Dict[str, float] = {
+    "vpip": 0.3,
+    "pfr": 0.2,
+    "af": 1.0,
+    "three_bet_percent": 0.1,
+    "cbet_percent": 0.5,
+    "fold_to_cbet_percent": 0.5,
+    "went_to_showdown_percent": 0.2,
+    "win_at_showdown_percent": 0.4,
+    "wwsf_percent": 0.4,
+    "fold_to_3bet_after_raise_percent": 0.5,
+    "squeeze_percent": 0.05,
+}
+
+# 12-feature block returned when an opponent has neither a prior nor any
+# live data. Kept as literals (not derived from NEUTRAL_PRIOR_RATES) so
+# legacy tests that pin the exact values keep passing.
+UNKNOWN_OPPONENT_DEFAULTS: List[float] = [
+    0.3, 0.2, 0.33, 0.1, 0.5, 0.5, 0.2, 0.4, 0.4, 0.5, 0.05, 0.0,
+]
+
+# Number of live hands at which priors fully fade out of the obs vector.
+PRIOR_BLEND_HANDS: float = 50.0
 
 
 class Action(Enum):
@@ -319,6 +362,11 @@ class OpponentTracker:
         self.current_hand: Optional[HandRecord] = None
         self.hand_number: int = 0
         self.bb: int = 0
+        # Per-seat priors loaded from the registry at session start. They
+        # fade out of the obs vector linearly over PRIOR_BLEND_HANDS live
+        # hands, so the policy sees prior knowledge of each opponent until
+        # in-session evidence stabilizes.
+        self.priors: Dict[int, Dict[str, float]] = {}
         
     def start_hand(self, hand_number: int, players: List[Dict], dealer_position: int,
                    small_blind: int, big_blind: int):
@@ -716,37 +764,126 @@ class OpponentTracker:
             [8]  Won When Saw Flop % (0-1):        WWSF
             [9]  Fold to 3-Bet after Raise (0-1):  Fold frequency vs 3-bets after raising
             [10] Squeeze % (0-1):                  Squeeze attempts vs opportunities
-            [11] Confidence (0-1):                 min(hands_played / 100, 1.0)
+            [11] Confidence (0-1):                 min(total_hands_observed / 100, 1.0)
+
+        Priors loaded via ``seed_priors`` blend with live observations.
+        Live weight ramps linearly from 0 → 1 over the first
+        ``PRIOR_BLEND_HANDS`` hands; after that, the live tracker fully
+        owns the feature. Confidence reflects total evidence
+        (prior + live), so the policy can tell "rich knowledge" from "no
+        idea yet".
         """
-        features = []
+        features: List[float] = []
 
         for i in range(max_opponents):
             if i < len(opponent_ids):
-                pid = opponent_ids[i]
-                if pid in self.opponents:
-                    opp = self.opponents[pid]
-                    features.extend([
-                        min(opp.vpip, 1.0),
-                        min(opp.pfr, 1.0),
-                        min(opp.af / 3.0, 1.0),
-                        min(opp.three_bet_percent, 1.0),
-                        min(opp.cbet_percent, 1.0),
-                        min(opp.fold_to_cbet_percent, 1.0),
-                        min(opp.went_to_showdown_percent, 1.0),
-                        min(opp.win_at_showdown_percent, 1.0),
-                        min(opp.wwsf_percent, 1.0),
-                        min(opp.fold_to_3bet_after_raise_percent, 1.0),
-                        min(opp.squeeze_percent, 1.0),
-                        opp.confidence,
-                    ])
-                else:
-                    # Opponent in game but not yet tracked (new player).
-                    # Neutral defaults for unknown tendencies.
-                    features.extend([0.3, 0.2, 0.33, 0.1, 0.5, 0.5, 0.2, 0.4, 0.4, 0.5, 0.05, 0.0])
+                features.extend(self._opponent_feature_block(opponent_ids[i]))
             else:
                 features.extend([0.0] * features_per_opponent)
 
         return features
+
+    def _opponent_feature_block(self, pid: int) -> List[float]:
+        opp = self.opponents.get(pid)
+        prior = self.priors.get(pid)
+
+        live_hands = opp.hands_played if opp else 0
+        prior_hands = int(prior.get("hands_observed", 0)) if prior else 0
+
+        # No prior, no live data → neutral defaults (preserves old behavior
+        # for unseeded, unseen opponents).
+        if opp is None and prior is None:
+            return list(UNKNOWN_OPPONENT_DEFAULTS)
+
+        # Live values (zero if no live profile yet — prior carries the slot).
+        live_rates: Dict[str, float] = {
+            "vpip": opp.vpip if opp else 0.0,
+            "pfr": opp.pfr if opp else 0.0,
+            "af": opp.af if opp else 0.0,
+            "three_bet_percent": opp.three_bet_percent if opp else 0.0,
+            "cbet_percent": opp.cbet_percent if opp else 0.0,
+            "fold_to_cbet_percent": opp.fold_to_cbet_percent if opp else 0.0,
+            "went_to_showdown_percent": opp.went_to_showdown_percent if opp else 0.0,
+            "win_at_showdown_percent": opp.win_at_showdown_percent if opp else 0.0,
+            "wwsf_percent": opp.wwsf_percent if opp else 0.0,
+            "fold_to_3bet_after_raise_percent": (
+                opp.fold_to_3bet_after_raise_percent if opp else 0.0
+            ),
+            "squeeze_percent": opp.squeeze_percent if opp else 0.0,
+        }
+
+        # Blend weights — live weight is 0 with no live hands, 1 after
+        # PRIOR_BLEND_HANDS. With no prior the live data takes over
+        # immediately; with no live data the prior carries everything.
+        if prior is None:
+            live_w, prior_w = 1.0, 0.0
+        elif opp is None:
+            live_w, prior_w = 0.0, 1.0
+        else:
+            live_w = min(live_hands / PRIOR_BLEND_HANDS, 1.0)
+            prior_w = 1.0 - live_w
+
+        def blended(key: str) -> float:
+            live_val = live_rates[key]
+            prior_val = (prior.get(key, NEUTRAL_PRIOR_RATES[key])
+                         if prior is not None else 0.0)
+            return live_w * live_val + prior_w * prior_val
+
+        # When there's no prior, the obs confidence is the live profile's
+        # confidence field (preserves legacy behavior where tests pin
+        # confidence directly). When a prior exists, fold its hand count in
+        # so the policy sees richer accumulated evidence.
+        if prior is None:
+            confidence = opp.confidence if opp else 0.0
+        else:
+            confidence = min((live_hands + prior_hands) / 100.0, 1.0)
+
+        return [
+            min(blended("vpip"), 1.0),
+            min(blended("pfr"), 1.0),
+            min(blended("af") / 3.0, 1.0),
+            min(blended("three_bet_percent"), 1.0),
+            min(blended("cbet_percent"), 1.0),
+            min(blended("fold_to_cbet_percent"), 1.0),
+            min(blended("went_to_showdown_percent"), 1.0),
+            min(blended("win_at_showdown_percent"), 1.0),
+            min(blended("wwsf_percent"), 1.0),
+            min(blended("fold_to_3bet_after_raise_percent"), 1.0),
+            min(blended("squeeze_percent"), 1.0),
+            confidence,
+        ]
+
+    def seed_priors(self, priors_by_pid: Dict[int, Dict[str, float]]) -> None:
+        """Install per-seat priors from the registry. The obs vector will
+        fade these out linearly as live hands accumulate (see
+        ``get_observation_features`` and ``PRIOR_BLEND_HANDS``)."""
+        self.priors = {pid: dict(stats) for pid, stats in priors_by_pid.items()}
+
+    def snapshot_for_registry(self) -> Dict[int, Dict[str, Any]]:
+        """Per-opponent stat snapshot for write-back to the registry.
+
+        Returned dict maps player_id -> flat stats dict + 'hands_observed'.
+        Compatible with ``AgentRegistry.update_behavior_stats(agent_id,
+        new_stats, hands_observed)``, which performs the weighted
+        cross-run merge against the existing card.behavior_stats."""
+        snap: Dict[int, Dict[str, Any]] = {}
+        for pid, opp in self.opponents.items():
+            entry: Dict[str, Any] = {"hands_observed": int(opp.hands_played)}
+            entry["vpip"] = float(opp.vpip)
+            entry["pfr"] = float(opp.pfr)
+            entry["af"] = float(opp.af)
+            entry["three_bet_percent"] = float(opp.three_bet_percent)
+            entry["cbet_percent"] = float(opp.cbet_percent)
+            entry["fold_to_cbet_percent"] = float(opp.fold_to_cbet_percent)
+            entry["went_to_showdown_percent"] = float(opp.went_to_showdown_percent)
+            entry["win_at_showdown_percent"] = float(opp.win_at_showdown_percent)
+            entry["wwsf_percent"] = float(opp.wwsf_percent)
+            entry["fold_to_3bet_after_raise_percent"] = float(
+                opp.fold_to_3bet_after_raise_percent
+            )
+            entry["squeeze_percent"] = float(opp.squeeze_percent)
+            snap[pid] = entry
+        return snap
     
     def get_opponent_stats(self, opponent_id: int) -> Optional[Dict]:
         """Get human-readable stats for an opponent"""

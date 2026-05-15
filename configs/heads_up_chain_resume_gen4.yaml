@@ -1,0 +1,54 @@
+# Next chain segment, resuming from heads_up_chain_v4_gen0.
+# v4_gen1 was rejected by the gate; with the new BestCheckpointCallback
+# wired into train.py, the registered card will now point to the peak
+# checkpoint seen during training rather than final_model.zip.
+# 2 generations × 2M timesteps, same hyperparams as previous segments.
+
+environment:
+  num_players: 2
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+
+training:
+  total_timesteps: 2000000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.05
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+opponents:
+  strategy: latest
+  kind: ppo
+  fixed_ids: []
+
+continuation:
+  resume_from: heads_up_chain_v4_gen0
+  generations: 2
+
+eval_gate:
+  enabled: true
+  num_hands: 1000
+  threshold_mbb_per_100: -100.0
+  seed: 0
+
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+logging:
+  log_dir: "./logs/"
+  save_frequency: 100000
+  model_dir: "./models/"

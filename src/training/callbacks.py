@@ -4,7 +4,7 @@ Enhanced training callbacks for metrics collection
 
 import json
 import os
-from typing import Optional
+from typing import List, Optional
 
 from stable_baselines3.common.callbacks import BaseCallback
 import numpy as np
@@ -32,6 +32,11 @@ class MetricsCallback(BaseCallback):
         self.episode_wins = 0
         self.episode_count = 0
         self.last_logged_step = 0
+        # Pointer into episode_rewards marking where the previous snapshot
+        # ended. The dashboard's "raw" reward series wants per-window means
+        # (noisy); the "avg(100)" series wants the trailing-100 smoothed
+        # mean. Without this pointer both end up identical.
+        self._last_logged_episode_idx = 0
         # Cached after _on_training_start: action-bucket indices read off
         # the env's actual action space so we don't hard-code 6-action
         # layout. Populated lazily because env isn't bound yet at __init__.
@@ -115,6 +120,7 @@ class MetricsCallback(BaseCallback):
         self.episode_wins = 0
         self.episode_count = 0
         self.last_logged_step = 0
+        self._last_logged_episode_idx = 0
         self._action_buckets = self._resolve_action_buckets()
 
     def _resolve_action_buckets(self):
@@ -244,17 +250,28 @@ class MetricsCallback(BaseCallback):
 
         if hasattr(self.model, 'logger') and self.model.logger:
             if hasattr(self.model.logger, 'name_to_value'):
-                policy_loss = self.model.logger.name_to_value.get('train/policy_loss', 0.0)
+                # SB3 PPO writes the policy loss under 'train/policy_gradient_loss'
+                # (see stable_baselines3/ppo/ppo.py). The old key 'train/policy_loss'
+                # silently defaulted to 0.0, so the dashboard's policy-loss curve
+                # was flat-zero for every run.
+                policy_loss = self.model.logger.name_to_value.get('train/policy_gradient_loss', 0.0)
                 value_loss = self.model.logger.name_to_value.get('train/value_loss', 0.0)
                 entropy_loss = self.model.logger.name_to_value.get('train/entropy_loss', 0.0)
 
-        # Prepare agent stats
+        # Prepare agent stats. fold/call/raise/all_in_rate are passed through
+        # so TrainingMetrics.record_step picks them up — without this, the
+        # dashboard's "Action rate totals" panel renders flat zero lines
+        # because metrics.json defaults the keys to 0.
         agent_stats = {
             'win_rate': float(win_rate),
             'episodes': int(self.episode_count),
             'avg_reward': float(avg_reward),
             'max_reward': float(max_reward),
             'min_reward': float(min_reward),
+            'fold_rate': float(fold_rate),
+            'call_rate': float(call_rate),
+            'raise_rate': float(raise_rate),
+            'all_in_rate': float(all_in_rate),
         }
 
         # Prepare learning metrics
@@ -265,10 +282,20 @@ class MetricsCallback(BaseCallback):
             'entropy': float(entropy_loss)
         }
 
+        # The dashboard's "raw" series wants per-window means and "avg(100)"
+        # wants a trailing-100 smoothed view, so we hand record_step the
+        # current-window slice (window_rewards) and let it stash the
+        # trailing-100 mean alongside via agent_stats.
+        window_rewards = self.episode_rewards[self._last_logged_episode_idx:]
+        trailing_100 = self.episode_rewards[-100:] if self.episode_rewards else []
+        if trailing_100:
+            agent_stats['avg_reward_100'] = float(np.mean(trailing_100))
+        self._last_logged_episode_idx = len(self.episode_rewards)
+
         # Log to custom metrics system
         self.metrics.log_step(
             self.num_timesteps,
-            self.episode_rewards[-100:] if self.episode_rewards else [],
+            window_rewards,
             agent_stats,
             learning_metrics
         )
@@ -537,3 +564,123 @@ class OpponentProfitCallback(BaseCallback):
         self.profit_tracker.checkpoint(self.num_timesteps)
         print("\nFinal Opponent Profit Summary:")
         self.profit_tracker.print_summary()
+
+
+class BestCheckpointCallback(BaseCallback):
+    """Rolling eval-gate that promotes the best checkpoint seen during
+    training to ``best_model.zip``.
+
+    The checkpoint sweep across the v1-v4 chain showed every gen's
+    ``final_model.zip`` was 0.5M-1.8M mbb/100 worse than some earlier
+    checkpoint — PPO peaks and then collapses. Registering the final
+    throws away the peak. This callback runs the same EvalGate used for
+    final acceptance every ``eval_freq`` steps, keeps the best snapshot
+    on disk, and records the per-eval history so ``train.py`` can
+    register the best instead of the last.
+    """
+
+    def __init__(
+        self,
+        predecessor_path: str,
+        predecessor_id: str,
+        save_dir: str,
+        eval_freq: int,
+        num_hands: int = 1000,
+        starting_stack: int = 1000,
+        small_blind: int = 5,
+        big_blind: int = 10,
+        seed: int = 0,
+        verbose: int = 1,
+    ):
+        super().__init__(verbose)
+        self.predecessor_path = predecessor_path
+        self.predecessor_id = predecessor_id
+        self.save_dir = save_dir
+        self.eval_freq = eval_freq
+        self.num_hands = num_hands
+        self.starting_stack = starting_stack
+        self.small_blind = small_blind
+        self.big_blind = big_blind
+        self.seed = seed
+        self.best_mbb_per_100: float = -float("inf")
+        self.best_steps: Optional[int] = None
+        self.best_stats: Optional[dict] = None
+        self.history: List[dict] = []
+        self._best_path = os.path.join(save_dir, "best_model.zip")
+        self._tmp_stem = os.path.join(save_dir, "_candidate_tmp")
+
+    def _on_step(self) -> bool:
+        if self.n_calls % self.eval_freq != 0:
+            return True
+
+        from src.agents.opponent_ppo import OpponentPPO
+        from src.training.eval_gate import EvalGate
+
+        self.model.save(self._tmp_stem)
+        tmp_zip = self._tmp_stem + ".zip"
+
+        candidate = OpponentPPO(tmp_zip, name=f"cand_{self.num_timesteps}")
+        predecessor = OpponentPPO(self.predecessor_path, name=self.predecessor_id)
+
+        gate = EvalGate(
+            num_hands=self.num_hands,
+            starting_stack=self.starting_stack,
+            small_blind=self.small_blind,
+            big_blind=self.big_blind,
+            seed=self.seed,
+        )
+        result = gate.evaluate(
+            candidate, predecessor,
+            candidate_id=f"cand_{self.num_timesteps}",
+            predecessor_id=self.predecessor_id,
+        )
+        mbb = result.mbb_per_100
+
+        self.history.append({
+            "steps": int(self.num_timesteps),
+            "mbb_per_100": float(mbb),
+            "profit_chips": float(result.candidate_profit_chips),
+            "wins": result.candidate_wins,
+            "losses": result.candidate_losses,
+        })
+
+        if mbb > self.best_mbb_per_100:
+            self.best_mbb_per_100 = mbb
+            self.best_steps = int(self.num_timesteps)
+            self.best_stats = result.to_dict()
+            os.replace(tmp_zip, self._best_path)
+            if self.verbose:
+                print(
+                    f"  [best] new peak at {self.num_timesteps:,}: "
+                    f"mbb/100={mbb:+.0f}"
+                )
+        else:
+            try:
+                os.remove(tmp_zip)
+            except OSError:
+                pass
+            if self.verbose:
+                best_steps_label = (
+                    f"{self.best_steps:,}" if self.best_steps is not None else "n/a"
+                )
+                print(
+                    f"  [best] step {self.num_timesteps:,}: "
+                    f"mbb/100={mbb:+.0f} "
+                    f"(best={self.best_mbb_per_100:+.0f} @ {best_steps_label})"
+                )
+
+        self._write_history()
+        return True
+
+    def _write_history(self) -> None:
+        path = os.path.join(self.save_dir, "best_history.json")
+        with open(path, "w") as f:
+            json.dump({
+                "predecessor_id": self.predecessor_id,
+                "best_mbb_per_100": (
+                    self.best_mbb_per_100 if self.best_steps is not None else None
+                ),
+                "best_steps": self.best_steps,
+                "best_stats": self.best_stats,
+                "history": self.history,
+            }, f, indent=2)

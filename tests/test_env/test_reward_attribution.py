@@ -156,6 +156,77 @@ class TestEnvTerminalReward:
         assert reward == pytest.approx(expected, abs=1e-6)
 
 
+class TestRewardBaselineAcrossHands:
+    """Multi-hand reward accounting must use the POST-rebuy baseline.
+
+    The terminal reward formula is:
+        reward = (learner.stack - learner.starting_stack_this_hand) / env.starting_stack
+
+    starting_stack_this_hand is set in reset_for_new_hand AFTER auto-rebuy
+    runs in env.reset. If this ordering ever flips, every post-bust hand
+    would return a reward of ~+1.0 even when the learner does nothing
+    (the rebuy chips themselves would register as "winnings"). That's
+    exactly the shape of the eval_gate leak we're hunting.
+    """
+
+    def test_per_hand_reward_uses_post_rebuy_baseline(self):
+        """After a bust+rebuy, a flat hand (learner does nothing
+        meaningful) returns a reward near zero — not +1 from the rebuy
+        chips."""
+        env = _seeded_env(num_players=2)
+        learner_id = env.learning_agent_id
+
+        # Bust the learner.
+        env.game_state.players[learner_id].stack = 0
+
+        # Reset triggers rebuy; baseline should snap to starting_stack.
+        env.reset()
+        baseline = env.game_state.players[learner_id].starting_stack_this_hand
+        assert baseline == env.starting_stack, (
+            "Pre-condition: post-rebuy baseline must equal starting_stack"
+        )
+
+        # Play the hand to terminal with everyone calling/checking.
+        terminated = False
+        reward = 0.0
+        steps = 0
+        while not terminated and steps < 50:
+            _, reward, terminated, _, _ = env.step(1)  # always call/check
+            steps += 1
+
+        # Whatever the outcome, the reward must equal stack-delta /
+        # starting_stack. If the baseline leaked (stayed at 0 or some
+        # busted value), reward would be ~+1 just from the rebuy.
+        learner = env.game_state.players[learner_id]
+        expected = (learner.stack - baseline) / env.starting_stack
+        assert reward == pytest.approx(expected, abs=1e-4)
+        # Per-hand reward magnitude is bounded by 1.0 in either direction
+        # (you can lose at most your starting stack, win at most opponent's).
+        assert -1.0 <= reward <= 1.0
+
+    def test_no_reward_inflation_across_multiple_bust_rebuys(self):
+        """Bust + rebuy 3 times across separate hands; final hand's
+        reward magnitude must stay bounded by 1.0 (the per-hand maximum).
+        A compounding leak would make this grow with each rebuy."""
+        env = _seeded_env(num_players=2)
+        learner_id = env.learning_agent_id
+
+        for _ in range(3):
+            env.game_state.players[learner_id].stack = 0
+            env.reset()
+            # Play a flat hand to terminal.
+            terminated = False
+            reward = 0.0
+            steps = 0
+            while not terminated and steps < 50:
+                _, reward, terminated, _, _ = env.step(1)
+                steps += 1
+            assert -1.0 <= reward <= 1.0, (
+                f"reward={reward} after rebuy — magnitude > 1 indicates "
+                "rebuy chips are bleeding into the reward signal."
+            )
+
+
 class TestEnvReceivesLearningAgentIdAtConstruction:
     """After parameterization, env attributes reward to the configured seat."""
 

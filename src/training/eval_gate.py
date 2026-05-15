@@ -59,6 +59,21 @@ class EvalGate:
         self.big_blind = big_blind
         self.seed = seed
 
+    def _build_env(self) -> TexasHoldemEnv:
+        # track_opponents=True is mandatory: training (train.py:_build_env)
+        # builds the env with tracking on, so saved PPO models expect a
+        # 161-dim obs. Mismatching here makes every loaded PPO opponent
+        # crash inside predict() and silently fall back to "call",
+        # producing a meaningless gate result.
+        return TexasHoldemEnv(
+            num_players=2,
+            starting_stack=self.starting_stack,
+            small_blind=self.small_blind,
+            big_blind=self.big_blind,
+            track_opponents=True,
+            learning_agent_id=0,
+        )
+
     def evaluate(
         self,
         candidate: BaseAgent,
@@ -67,14 +82,7 @@ class EvalGate:
         candidate_id: str = "candidate",
         predecessor_id: str = "predecessor",
     ) -> EvalResult:
-        env = TexasHoldemEnv(
-            num_players=2,
-            starting_stack=self.starting_stack,
-            small_blind=self.small_blind,
-            big_blind=self.big_blind,
-            track_opponents=False,
-            learning_agent_id=0,
-        )
+        env = self._build_env()
         env.game_state.players[0].seat_agent(candidate)
         env.game_state.players[1].seat_agent(predecessor)
         candidate.player_id = 0

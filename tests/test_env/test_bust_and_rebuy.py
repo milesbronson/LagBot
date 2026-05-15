@@ -386,5 +386,114 @@ class TestChipFlowTracking:
         pytest.skip("No player went bust in 500 hands")
 
 
+class TestRebuyResetsRewardBaseline:
+    """Diagnostic tests for the suspected EvalGate reward leak.
+
+    The leak hypothesis: when a player busts and gets auto-rebought on
+    the next reset(), the rebuy must NOT leak into per-hand reward
+    accounting. Per-hand profit is computed as
+        delta = stack_after - starting_stack_this_hand
+    so starting_stack_this_hand on the post-rebuy hand MUST be set to
+    the rebought stack value (== env.starting_stack), not to 0 or some
+    leftover previous value. Otherwise delta absorbs the rebuy as
+    profit and EvalGate's mbb/100 inflates unboundedly.
+    """
+
+    def test_starting_stack_this_hand_equals_starting_stack_after_rebuy(self):
+        """After auto-rebuy, the post-reset baseline must be the fresh
+        starting_stack — not 0, not a stale value. This is the single
+        invariant the gate's per-hand math depends on.
+
+        Note: stack itself is starting_stack minus the posted blind
+        after reset(). starting_stack_this_hand is the PRE-blind baseline,
+        which is the invariant we actually rely on for reward."""
+        env = TexasHoldemEnv(num_players=2, starting_stack=1000)
+        env.reset()
+
+        # Force a bust on player 0.
+        env.game_state.players[0].stack = 0
+
+        # Next reset triggers rebuy.
+        env.reset()
+
+        p0 = env.game_state.players[0]
+        assert p0.starting_stack_this_hand == env.starting_stack, (
+            f"starting_stack_this_hand={p0.starting_stack_this_hand} after "
+            f"rebuy; expected {env.starting_stack}. If this is 0, every "
+            "post-bust hand's reward includes the rebuy amount as 'profit'."
+        )
+        # stack + posted blind must equal starting_stack — i.e. chips at
+        # the table from player 0's seat are exactly one fresh stack.
+        assert p0.stack + p0.current_bet == env.starting_stack, (
+            f"stack={p0.stack} + current_bet={p0.current_bet} != "
+            f"{env.starting_stack}; rebuy left chips unaccounted for."
+        )
+
+    def test_rebuy_does_not_leak_into_per_hand_reward(self):
+        """Bust → rebuy → play one hand → confirm the per-hand reward
+        (stack - starting_stack_this_hand) stays bounded by ±starting_stack.
+        If the rebuy leaked, the per-hand reward could be > starting_stack
+        (rebuy chips + winnings)."""
+        env = TexasHoldemEnv(num_players=2, starting_stack=1000)
+        env.reset()
+
+        # Bust player 0 manually.
+        env.game_state.players[0].stack = 0
+
+        # Rebuy on next reset.
+        env.reset()
+        baseline = env.game_state.players[0].starting_stack_this_hand
+        assert baseline == env.starting_stack
+
+        # Play to terminal.
+        done = False
+        steps = 0
+        while not done and steps < 100:
+            _, _, term, trunc, _ = env.step(env.action_space.sample())
+            done = term or trunc
+            steps += 1
+
+        stack_after = env.game_state.players[0].stack
+        delta = stack_after - baseline
+        assert abs(delta) <= env.starting_stack, (
+            f"Per-hand delta {delta} exceeds starting_stack — rebuy "
+            f"chips bled into reward signal."
+        )
+
+    def test_repeated_bust_and_rebuy_baselines_stay_clean(self):
+        """Bust + rebuy multiple times; baseline must reset to
+        starting_stack every time. A subtle leak could compound: e.g.
+        starting_stack_this_hand carrying over a stale value across
+        resets."""
+        env = TexasHoldemEnv(num_players=2, starting_stack=1000)
+        env.reset()
+
+        for _ in range(5):
+            env.game_state.players[0].stack = 0
+            env.reset()
+            p0 = env.game_state.players[0]
+            assert p0.starting_stack_this_hand == env.starting_stack
+            # stack + posted blind == fresh starting_stack
+            assert p0.stack + p0.current_bet == env.starting_stack
+
+    def test_rebuy_increments_total_buy_in_not_stack_above_starting(self):
+        """Rebuy must add exactly starting_stack to total_buy_in; stack
+        ends at starting_stack, not 2× starting_stack. The env's
+        record_buy_in adds to stack AND env.reset sets stack=starting_stack
+        — if the override ever gets removed and record_buy_in is allowed
+        to run twice, stack would balloon. Pin both invariants."""
+        env = TexasHoldemEnv(num_players=2, starting_stack=1000)
+        env.reset()
+        initial_buy_in = env.game_state.players[0].total_buy_in
+
+        env.game_state.players[0].stack = 0
+        env.reset()
+
+        p0 = env.game_state.players[0]
+        # stack + posted blind == fresh starting_stack (one stack at the table)
+        assert p0.stack + p0.current_bet == env.starting_stack
+        assert p0.total_buy_in == initial_buy_in + env.starting_stack
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

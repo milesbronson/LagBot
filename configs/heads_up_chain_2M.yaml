@@ -1,0 +1,58 @@
+# Heads-up self-play chain. Run AFTER configs/heads_up_anchor_2M.yaml has
+# produced a registered anchor card (e.g. heads_up_anchor_v1).
+# Set continuation.resume_from to that card id before launching.
+#
+# 3 generations × 2M timesteps each. Gate threshold softened to -100
+# mbb/100 (was 0.0). Rationale: during the early self-play regime we
+# care about "not catastrophically worse than the parent" rather than
+# strictly better — registering near-parity attempts lets the chain
+# advance and noise out variance over multiple generations.
+
+environment:
+  num_players: 2
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+
+training:
+  total_timesteps: 2000000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.05
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+opponents:
+  strategy: latest
+  kind: ppo
+  fixed_ids: []
+
+continuation:
+  resume_from: heads_up_anchor_v1
+  generations: 3
+
+eval_gate:
+  enabled: true
+  num_hands: 1000
+  threshold_mbb_per_100: -100.0
+  seed: 0
+
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+logging:
+  log_dir: "./logs/"
+  save_frequency: 100000
+  model_dir: "./models/"
