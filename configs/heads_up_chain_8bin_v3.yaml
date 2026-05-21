@@ -1,0 +1,83 @@
+# 8-bin heads-up chain v3 — adds counter-aggression anchors
+# (Counterpuncher, Trapper, ThreeBetBully) to the stratified pool.
+#
+# v2 collapsed onto a hyper-aggressive raise-everything policy because
+# no anchor in the pool punished it: TightAggressive folded too much
+# postflop, LoosePassive never raised back, Shover only fired all-ins.
+# The new anchors call down light, slowplay, and 3-bet light — three
+# distinct ways to make pure aggression bleed equity.
+#
+# Prerequisite (once): python scripts/seed_anchors.py
+
+environment:
+  num_players: 2
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+  raise_bins: [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0]
+
+training:
+  total_timesteps: 2000000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.05
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+opponents:
+  strategy: stratified_by_anchor
+  kind: null
+  fixed_ids: []
+  with_replacement: false
+
+continuation:
+  resume_from: heads_up_anchor_8bin_v1
+  generations: 50
+
+eval_gate:
+  enabled: true
+  num_hands: 1000
+  threshold_mbb_per_100: -100.0
+  seed: 0
+
+stratified_eval_gate:
+  enabled: true
+  num_hands: 2000
+  per_stratum_threshold_mbb_per_100: -100.0
+  aggregate_threshold_mbb_per_100: -50.0
+  # Pool now has 10 anchors. Require 6 strata to pass (was 5/7).
+  # Forces broader competence — can't pass by crushing the same
+  # 5 anchors every gen.
+  min_strata_to_pass: 6
+  cards_per_stratum: 1
+  seed: 0
+  include_anchors: true
+  max_retries: 2
+  retry_seed_offset: 1000
+
+regression_eval:
+  enabled: true
+  num_hands: 500
+  threshold_mbb_per_100: -100.0
+  seed: 0
+  include_fixtures: true
+
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+logging:
+  log_dir: "./logs/"
+  save_frequency: 100000
+  model_dir: "./models/"

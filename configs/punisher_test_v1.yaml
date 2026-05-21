@@ -1,0 +1,77 @@
+# Punisher-only diagnostic: train against ONLY the 4 anchors that
+# crushed v3_gen1 in the stratified gate (loose_aggressive,
+# loose_passive, three_bet_bully, shover). If the env is healthy and
+# the PPO update is functional, the bot must shift toward more folding
+# because aggression is structurally -EV against this restricted pool.
+#
+# Starts from heads_up_anchor_8bin_v1 (same baseline as the main v3
+# chain). One generation, 2M timesteps. Read the resulting action
+# mix against the same yardstick used for v3:
+#   - v3 gen0-gen2 was hovering at fold~8%, raise~74%
+#   - If the punisher curriculum doesn't move fold% materially, the
+#     env or PPO setup is the bottleneck, not the pool composition.
+
+environment:
+  num_players: 2
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+  raise_bins: [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0]
+
+training:
+  total_timesteps: 2000000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.05
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+opponents:
+  # Restrict to the 4 anchors that beat v3 in the gate (LA, LP, 3BB,
+  # Shover) by excluding every other registry card. Random sampler
+  # then rotates uniformly across the 4 per episode.
+  strategy: random
+  kind: anchor
+  exclude_ids:
+    - anchor_tight_passive_v0
+    - anchor_tight_aggressive_v0
+    - anchor_min_raiser_v0
+    - anchor_overbettor_v0
+    - anchor_counterpuncher_v0
+    - anchor_trapper_v0
+  with_replacement: true
+
+continuation:
+  resume_from: heads_up_anchor_8bin_v1
+  generations: 1
+
+# Disable both gates — this is a one-shot diagnostic, gates would
+# fail since the bot is only trained against 4 of 10 strata.
+eval_gate:
+  enabled: false
+
+stratified_eval_gate:
+  enabled: false
+
+regression_eval:
+  enabled: false
+
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+logging:
+  log_dir: "./logs/"
+  save_frequency: 100000
+  model_dir: "./models/"

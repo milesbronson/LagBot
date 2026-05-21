@@ -49,6 +49,8 @@ from src.training.opponent_autoplay_wrapper import OpponentAutoPlayWrapper
 from src.training.opponent_profit_tracker import OpponentProfitTracker
 from src.training.opponent_sampler import OpponentSampler
 from src.training.regression_eval import RegressionEval
+from src.training.regret_reward_wrapper import MODES as REWARD_MODES, RegretRewardWrapper
+from src.training.stratified_eval_gate import StratifiedEvalGate
 
 
 CALL_FIXTURE_ID = "rule_call_v0"
@@ -71,6 +73,14 @@ def _instantiate_opponent(card: AgentCard):
         return CallAgent(name=card.name)
     if card.kind == "random":
         return RandomAgent(name=card.name)
+    if card.kind == "anchor":
+        from src.agents.anchors import ALL_ANCHORS
+        for cls in ALL_ANCHORS:
+            if cls.ANCHOR_ID == card.id:
+                return cls(name=card.name)
+        raise ValueError(
+            f"anchor card {card.id!r} has no matching AnchorAgent class"
+        )
     raise ValueError(f"unknown agent kind {card.kind!r}")
 
 
@@ -114,6 +124,7 @@ def _build_opponent_factory(
             strategy=opponents_cfg.get("strategy", "weighted_recency"),
             kind=opponents_cfg.get("kind"),
             ids=opponents_cfg.get("fixed_ids"),
+            anchors_seed_only=opponents_cfg.get("anchors_seed_only", False),
         )
         if not cards:
             # Empty registry pool — fall back to the call fixture so the
@@ -141,6 +152,7 @@ def select_opponent_cards(
         kind=opponents_cfg.get("kind"),
         exclude_ids=exclude,
         ids=opponents_cfg.get("fixed_ids"),
+        anchors_seed_only=opponents_cfg.get("anchors_seed_only", False),
     )
     # Pad with rule fixtures if the registry pool was too small.
     while len(cards) < num_needed:
@@ -160,8 +172,52 @@ def _build_env(env_cfg: dict) -> TexasHoldemEnv:
         rake_cap=env_cfg.get("rake_cap", 0),
         min_raise_multiplier=env_cfg.get("min_raise_multiplier", 1.0),
         reset_stacks_every_n_timesteps=env_cfg.get("reset_stacks_every_n_timesteps"),
+        raise_bins=env_cfg.get("raise_bins"),
         track_opponents=True,
     )
+
+
+def _run_stratified_gate(
+    env_cfg: dict,
+    strat_cfg: dict,
+    candidate_card: AgentCard,
+    training_pool_ids: List[str],
+    registry: AgentRegistry,
+) -> Tuple[bool, dict]:
+    """Run the stratified eval gate against a sampled per-stratum pool.
+    Returns ``(passed, result_dict)``. Caller decides whether to keep
+    or unregister the candidate."""
+    candidate = OpponentPPO(candidate_card.path, name=candidate_card.name)
+    if not candidate.is_loaded():
+        raise RuntimeError(
+            f"could not load freshly registered PPO from {candidate_card.path!r}"
+        )
+
+    gate = StratifiedEvalGate(
+        num_hands=strat_cfg.get("num_hands", 2000),
+        threshold_mbb_per_100=strat_cfg.get("per_stratum_threshold_mbb_per_100", -100.0),
+        aggregate_threshold_mbb_per_100=strat_cfg.get(
+            "aggregate_threshold_mbb_per_100", -200.0
+        ),
+        min_strata_to_pass=strat_cfg.get("min_strata_to_pass", 3),
+        cards_per_stratum=strat_cfg.get("cards_per_stratum", 1),
+        starting_stack=env_cfg["starting_stack"],
+        small_blind=env_cfg["small_blind"],
+        big_blind=env_cfg["big_blind"],
+        seed=strat_cfg.get("seed", 0),
+        raise_bins=env_cfg.get("raise_bins"),
+        include_anchors=strat_cfg.get("include_anchors", True),
+    )
+    result = gate.evaluate(
+        candidate=candidate,
+        candidate_card_id=candidate_card.id,
+        registry=registry,
+        training_pool_ids=training_pool_ids,
+        current_generation=candidate_card.generation,
+        opponent_factory=_instantiate_opponent,
+    )
+    print(gate.report(result))
+    return gate.passes(result), result.to_dict()
 
 
 def _run_eval_gate(
@@ -179,6 +235,7 @@ def _run_eval_gate(
         small_blind=env_cfg["small_blind"],
         big_blind=env_cfg["big_blind"],
         seed=eval_cfg.get("seed", 0),
+        raise_bins=env_cfg.get("raise_bins"),
     )
     result = gate.evaluate(
         candidate, predecessor,
@@ -355,6 +412,22 @@ def train_one_generation(
             profit_tracker=profit_tracker,
             seat_to_card=seat_to_card,
         )
+
+    reward_cfg = config.get("reward", {}) or {}
+    reward_mode = reward_cfg.get("mode", "profit")
+    if reward_mode not in REWARD_MODES:
+        raise ValueError(
+            f"reward.mode must be one of {REWARD_MODES}, got {reward_mode!r}"
+        )
+    if reward_mode != "profit":
+        regret_lambda = float(reward_cfg.get("regret_lambda", 1.0))
+        wrapped_env = RegretRewardWrapper(
+            wrapped_env, mode=reward_mode, regret_lambda=regret_lambda,
+        )
+        print(
+            f"  reward: mode={reward_mode} regret_lambda={regret_lambda}"
+        )
+
     agent.model.set_env(wrapped_env)
 
     save_callback = TrainingCallback(
@@ -453,6 +526,36 @@ def train_one_generation(
     )
     registry.register(card)
 
+    # Stratified eval gate: must hold up across the play-style manifold,
+    # not just vs the immediate predecessor that gated promotion in the
+    # single-pass gate above. On failure we unregister the card so the
+    # retry can register a fresh one under the same id.
+    strat_cfg = config.get("stratified_eval_gate", {})
+    if strat_cfg.get("enabled"):
+        training_pool_ids = [c.id for c in opponent_cards]
+        passed_strat, strat_result = _run_stratified_gate(
+            env_cfg, strat_cfg, card, training_pool_ids, registry,
+        )
+        # Persist the gate report next to other artifacts for this run.
+        strat_path = Path("metrics") / run_name / "stratified_gate.json"
+        strat_path.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        with open(strat_path, "w") as f:
+            json.dump(strat_result, f, indent=2)
+
+        if not passed_strat:
+            print(
+                f"\nStratifiedEvalGate FAILED for {run_name}: "
+                f"{strat_result['strata_passed']}/{strat_result['strata_evaluated']} "
+                f"strata passed (need {strat_result['min_strata_to_pass']}); "
+                f"aggregate {strat_result['aggregate_mbb_per_100']:+.0f} mbb/100. "
+                "Unregistering."
+            )
+            registry.remove(card.id)
+            return None
+        card.eval_stats = {**(card.eval_stats or {}), "stratified": strat_result}
+        registry.save()
+
     # Per-seat profit attribution only makes sense in static mode; under
     # rotation a seat hosts many cards over the course of a run, so the
     # bookkeeping in profit_tracker has no clean card->profit mapping.
@@ -470,6 +573,27 @@ def train_one_generation(
         card_snapshots=wrapped_env.snapshot_card_stats(),
     )
 
+    # Self-profile: the fold-back above only writes stats for cards seen
+    # as opponents during this run. The just-trained card needs its own
+    # stats so the dashboard + stratifier can place it without waiting
+    # for it to be sampled organically (which can take many gens).
+    try:
+        from scripts.profile_card import profile_card
+        prof_stats = profile_card(
+            card, hands_per_panel=300, raise_bins=env_cfg.get("raise_bins"),
+        )
+        prof_hands = int(prof_stats.get("hands_observed", 0))
+        if prof_hands > 0:
+            prof_rates = {k: v for k, v in prof_stats.items() if k != "hands_observed"}
+            registry.update_behavior_stats(card.id, prof_rates, prof_hands)
+            print(
+                f"  Auto-profiled {card.id}: hands={prof_hands}, "
+                f"vpip={prof_stats['vpip']:.3f}, pfr={prof_stats['pfr']:.3f}, "
+                f"af={prof_stats['af']:.2f}, 3bet={prof_stats['three_bet_percent']:.3f}"
+            )
+    except Exception as exc:
+        print(f"  (auto-profile skipped for {card.id}: {exc})")
+
     print(f"\nRegistered {card.id} (gen {card.generation}, parent={resume_from_id})")
 
     if regression_cfg.get("enabled", True):
@@ -481,6 +605,7 @@ def train_one_generation(
             big_blind=env_cfg["big_blind"],
             seed=regression_cfg.get("seed", 0),
             include_fixtures=regression_cfg.get("include_fixtures", True),
+            raise_bins=env_cfg.get("raise_bins"),
         )
         reg_result = reg.evaluate(card, registry)
         print(reg.report(reg_result))
@@ -496,10 +621,33 @@ def train(config_path: str, run_name: Optional[str] = None) -> None:
     cont_cfg = config.get("continuation", {})
     generations = cont_cfg.get("generations", 1)
 
+    strat_cfg = config.get("stratified_eval_gate", {})
+    max_retries = int(strat_cfg.get("max_retries", 0))
+    retry_seed_offset = int(strat_cfg.get("retry_seed_offset", 1000))
+
     base_name = run_name or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     for gen in range(generations):
         gen_name = base_name if generations == 1 else f"{base_name}_gen{gen}"
-        card = train_one_generation(config, gen_name, registry)
+
+        card = None
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                # Bump the gate seed so the same stratum draws don't keep
+                # failing for the same reason. Training reproducibility
+                # across attempts is intentionally relaxed — we want a
+                # genuinely fresh draw from PPO's RNG too.
+                config.setdefault("stratified_eval_gate", {})["seed"] = (
+                    int(strat_cfg.get("seed", 0)) + attempt * retry_seed_offset
+                )
+                print(
+                    f"\n>>> Retrying {gen_name} (attempt {attempt + 1}/"
+                    f"{max_retries + 1}) with bumped gate seed"
+                )
+
+            card = train_one_generation(config, gen_name, registry)
+            if card is not None:
+                break
+
         if card and generations > 1:
             config.setdefault("continuation", {})["resume_from"] = card.id
 

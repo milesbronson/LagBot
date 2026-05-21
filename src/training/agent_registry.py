@@ -53,6 +53,17 @@ class AgentRegistry:
         self.cards[card.id] = card
         self.save()
 
+    def remove(self, agent_id: str) -> bool:
+        """Drop a card from the registry. Returns True if anything was
+        removed. Used by the retry loop when a freshly registered
+        candidate fails the stratified eval gate and we want a clean
+        re-train (no orphan card pinned at the top of the gen ladder)."""
+        if agent_id in self.cards:
+            del self.cards[agent_id]
+            self.save()
+            return True
+        return False
+
     def get(self, agent_id: str) -> Optional[AgentCard]:
         return self.cards.get(agent_id)
 

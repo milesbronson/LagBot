@@ -23,7 +23,12 @@ class MetricsCallback(BaseCallback):
         self.metrics = metrics
         self.log_freq = log_freq
         self.episode_rewards = []
-        self.current_episode_reward = 0  # Track current episode reward
+        self.current_episode_reward = 0  # Track current episode reward (shaped)
+        # Parallel to episode_rewards but summing the UNSHAPED per-hand
+        # profit (info['raw_step_reward']). Lets the dashboard chart real
+        # winnings next to the regret-shaped training signal.
+        self.episode_raw_profits = []
+        self.current_episode_raw = 0.0
         self.episode_actions = []  # Track actions taken
         # Paired (action, street) records for per-street breakdown. Same
         # length as episode_actions when both fields are populated; entries
@@ -74,11 +79,20 @@ class MetricsCallback(BaseCallback):
                 self.episode_actions.append(int(a))
                 self.episode_action_streets.append((int(a), street))
 
-        # Track rewards
+        # Track rewards. current_episode_reward sums the SHAPED reward
+        # (what PPO optimises); current_episode_raw sums the unshaped
+        # per-hand profit the regret wrapper stashes under
+        # info['raw_step_reward'] — falling back to the shaped value in
+        # profit mode / when the wrapper isn't present (raw == shaped).
         if isinstance(rewards, np.ndarray):
-            self.current_episode_reward += float(rewards[0]) if len(rewards) > 0 else 0
+            step_shaped = float(rewards[0]) if len(rewards) > 0 else 0.0
         else:
-            self.current_episode_reward += float(rewards) if rewards is not None else 0
+            step_shaped = float(rewards) if rewards is not None else 0.0
+        self.current_episode_reward += step_shaped
+        step_raw = step_shaped
+        if infos and isinstance(infos[0], dict):
+            step_raw = float(infos[0].get('raw_step_reward', step_shaped))
+        self.current_episode_raw += step_raw
 
         # Track episode completion. Prefer SB3 Monitor's `info['episode']['r']`
         # (authoritative episode return) when present; fall back to the
@@ -93,16 +107,20 @@ class MetricsCallback(BaseCallback):
             if 'episode' in info:
                 episode_reward = info['episode'].get('r', 0)
                 self.episode_rewards.append(episode_reward)
+                self.episode_raw_profits.append(self.current_episode_raw)
                 self.episode_count += 1
                 if episode_reward > 0:
                     self.episode_wins += 1
                 self.current_episode_reward = 0
+                self.current_episode_raw = 0.0
             elif done:
                 self.episode_rewards.append(self.current_episode_reward)
+                self.episode_raw_profits.append(self.current_episode_raw)
                 self.episode_count += 1
                 if self.current_episode_reward > 0:
                     self.episode_wins += 1
                 self.current_episode_reward = 0
+                self.current_episode_raw = 0.0
 
         # Log periodically
         if self.num_timesteps - self.last_logged_step >= self.log_freq:
@@ -115,6 +133,8 @@ class MetricsCallback(BaseCallback):
         """Called at training start"""
         self.episode_rewards = []
         self.current_episode_reward = 0
+        self.episode_raw_profits = []
+        self.current_episode_raw = 0.0
         self.episode_actions = []
         self.episode_action_streets = []
         self.episode_wins = 0
@@ -290,6 +310,11 @@ class MetricsCallback(BaseCallback):
         trailing_100 = self.episode_rewards[-100:] if self.episode_rewards else []
         if trailing_100:
             agent_stats['avg_reward_100'] = float(np.mean(trailing_100))
+        # Raw (unshaped) per-hand profit, trailing-100 smoothed — charts the
+        # actual money curve next to the shaped training reward.
+        trailing_100_raw = self.episode_raw_profits[-100:] if self.episode_raw_profits else []
+        if trailing_100_raw:
+            agent_stats['avg_raw_profit_100'] = float(np.mean(trailing_100_raw))
         self._last_logged_episode_idx = len(self.episode_rewards)
 
         # Log to custom metrics system
@@ -307,6 +332,11 @@ class MetricsCallback(BaseCallback):
             self.model.logger.record("agent/avg_reward", avg_reward)
             self.model.logger.record("agent/max_reward", max_reward)
             self.model.logger.record("agent/min_reward", min_reward)
+            if self.episode_raw_profits:
+                self.model.logger.record(
+                    "agent/avg_raw_profit",
+                    float(np.mean(self.episode_raw_profits[-100:])),
+                )
             
             # Action distribution metrics
             self.model.logger.record("agent/fold_rate", fold_rate)

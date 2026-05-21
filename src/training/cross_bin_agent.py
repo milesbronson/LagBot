@@ -46,6 +46,10 @@ class CrossBinAgent(BaseAgent):
         self._env_all_in_idx = 2 + len(self.env_bins)
         self._identity = self.inner_bins == self.env_bins
 
+    def bind_env(self, env) -> None:
+        super().bind_env(env)
+        self.inner.bind_env(env)
+
     def select_action(
         self, observation: np.ndarray, valid_actions: Optional[list] = None
     ) -> int:

@@ -1,0 +1,92 @@
+# 8-bin heads-up chain v2 — stratified-by-anchor opponent sampling +
+# stratified eval gate.
+#
+# Prerequisite (once, before first run):
+#     python scripts/seed_anchors.py
+# This registers the 7 hand-coded anchor archetypes that define the
+# strata. The eval gate samples one opponent per stratum (from real
+# registry cards, NOT anchors) and requires both per-stratum and
+# aggregate mbb/100 thresholds to pass. Failing the gate unregisters
+# the candidate and the generation retries with a bumped gate seed.
+
+environment:
+  num_players: 2
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+  raise_bins: [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0]
+
+training:
+  total_timesteps: 2000000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.05
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+opponents:
+  strategy: stratified_by_anchor
+  # kind=null lets the sampler include anchors + ppo cards in the
+  # training pool; the gate's training_pool_ids exclusion still keeps
+  # eval matchups disjoint from training matchups.
+  kind: null
+  fixed_ids: []
+  with_replacement: false
+
+continuation:
+  resume_from: heads_up_anchor_8bin_v1
+  generations: 50
+
+# Legacy single-opponent gate stays enabled as a sanity check against
+# the immediate parent. Stratified gate is the real bar.
+eval_gate:
+  enabled: true
+  num_hands: 1000
+  threshold_mbb_per_100: -100.0
+  seed: 0
+
+stratified_eval_gate:
+  enabled: true
+  num_hands: 2000
+  per_stratum_threshold_mbb_per_100: -100.0
+  aggregate_threshold_mbb_per_100: -50.0
+  min_strata_to_pass: 5
+  cards_per_stratum: 1
+  seed: 0
+  # Include anchors as eval opponents so every stratum is covered
+  # before the live registry has populated all archetypes. Once the
+  # live pool spans every stratum, flip this off to make the bar
+  # "beat the live pool, not the scaffolding".
+  include_anchors: true
+  # If the gate fails, unregister the candidate and re-train the same
+  # generation up to max_retries more times, bumping the gate seed each
+  # attempt so we get fresh stratum draws.
+  max_retries: 2
+  retry_seed_offset: 1000
+
+regression_eval:
+  enabled: true
+  num_hands: 500
+  threshold_mbb_per_100: -100.0
+  seed: 0
+  include_fixtures: true
+
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+logging:
+  log_dir: "./logs/"
+  save_frequency: 100000
+  model_dir: "./models/"

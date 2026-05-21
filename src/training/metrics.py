@@ -25,6 +25,7 @@ class TrainingMetrics:
             'timesteps': [],
             'rewards': [],
             'avg_reward_100': [],
+            'avg_raw_profit_100': [],
             'win_rate': [],
             'fold_rate': [],
             'raise_rate': [],
@@ -89,6 +90,8 @@ class TrainingMetrics:
             self.metrics['all_in_rate'].append(agent_stats.get('all_in_rate', 0))
             if 'avg_reward_100' in agent_stats:
                 self.metrics['avg_reward_100'].append(float(agent_stats['avg_reward_100']))
+            if 'avg_raw_profit_100' in agent_stats:
+                self.metrics['avg_raw_profit_100'].append(float(agent_stats['avg_raw_profit_100']))
         
         if learning_metrics:
             self.metrics['learning_rate'].append(learning_metrics.get('learning_rate', 0))

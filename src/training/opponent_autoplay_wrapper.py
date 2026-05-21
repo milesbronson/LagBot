@@ -97,6 +97,7 @@ class OpponentAutoPlayWrapper(gym.Env):
                 )
             for pid, (kind, agent) in zip(self.non_learner_ids, opponents_list):
                 agent.seat(env.game_state.players[pid])
+                agent.bind_env(env)
                 self.opponents_by_id[pid] = agent
                 self.opponent_types_by_id[pid] = kind
             self.opponents = opponents_list
@@ -151,6 +152,7 @@ class OpponentAutoPlayWrapper(gym.Env):
                 tracker.priors.pop(pid, None)
 
             agent.seat(self.env.game_state.players[pid])
+            agent.bind_env(self.env)
             self.opponents_by_id[pid] = agent
             self.opponent_types_by_id[pid] = kind
 

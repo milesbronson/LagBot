@@ -46,7 +46,7 @@ BLACK = "#1c1c1c"
 CHIP = "#e7c84a"
 POT_RING = "#f4e07a"
 
-WIN_W = 1000
+WIN_W = 1400
 WIN_H = 720
 
 
@@ -260,8 +260,14 @@ class PokerTableApp:
             self._render()
 
     def _build_action_bar(self):
+        # Two rows so the custom-$ widgets never get pushed off-screen by a
+        # crowded bin button row. action_frame holds the discrete action
+        # buttons; custom_frame sits above and is dedicated to "Custom $:"
+        # entry + submit, plus the all-in button (most-used escape hatch).
         self.action_frame = tk.Frame(self.root, bg=RAIL)
-        self.action_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=10)
+        self.action_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(0, 10))
+        self.custom_frame = tk.Frame(self.root, bg=RAIL)
+        self.custom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(8, 0))
 
     def _build_log(self):
         self.log_var = tk.StringVar(value="")
@@ -280,6 +286,7 @@ class PokerTableApp:
         env = TexasHoldemEnv(
             num_players=2, starting_stack=1000, small_blind=5, big_blind=10,
             track_opponents=True, learning_agent_id=HUMAN_SEAT,
+            raise_bins=[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0],
         )
         env.reset()
         self.env = env
@@ -552,19 +559,20 @@ class PokerTableApp:
             btn.pack(side=tk.LEFT, padx=4)
             self._action_buttons.append(btn)
 
-        # Custom-$ entry — typed amount is translated to one of the bot's
-        # discrete actions via randomised pseudo-harmonic mapping. Every
-        # widget here is appended to self._action_buttons so the next
-        # _refresh_action_buttons() destroys them cleanly (avoids the
-        # "walking widgets" bug from before).
+        # Custom-$ row sits in its own frame (custom_frame) above the bin
+        # buttons so it stays visible even when the bin row is wide. Typed
+        # amount is translated to one of the bot's discrete actions via
+        # randomised pseudo-harmonic mapping. All widgets are tracked in
+        # self._action_buttons so _refresh_action_buttons() destroys them
+        # cleanly on the next refresh (avoids the "walking widgets" bug).
         raise_actions = [a for a in valid if a >= 2]
         if raise_actions:
-            label = tk.Label(self.action_frame, text="  Custom $:",
+            label = tk.Label(self.custom_frame, text="Custom $:",
                              fg=TEXT, bg=RAIL, font=self.font_button)
-            label.pack(side=tk.LEFT)
+            label.pack(side=tk.LEFT, padx=(0, 6))
             self._action_buttons.append(label)
 
-            entry = tk.Entry(self.action_frame, width=8,
+            entry = tk.Entry(self.custom_frame, width=10,
                              font=self.font_button)
             entry.pack(side=tk.LEFT, padx=4)
             self._action_buttons.append(entry)
@@ -581,12 +589,13 @@ class PokerTableApp:
                 self._human_action(action)
 
             submit_btn = self._make_button(
-                self.action_frame, "Bet ↑", "#a05a14", submit_custom,
+                self.custom_frame, "Bet ↑", "#a05a14", submit_custom,
                 padx=14,
             )
             submit_btn.pack(side=tk.LEFT, padx=4)
             self._action_buttons.append(submit_btn)
             entry.bind("<Return>", submit_custom)
+            entry.focus_set()
 
 
 def main():

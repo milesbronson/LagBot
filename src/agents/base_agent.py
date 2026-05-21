@@ -3,7 +3,7 @@ Base agent class for poker players
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 import numpy as np
 
@@ -15,11 +15,11 @@ class BaseAgent(ABC):
     """
     Abstract base class for poker agents
     """
-    
+
     def __init__(self, name: str = "Agent"):
         """
         Initialize the agent
-        
+
         Args:
             name: Agent name
         """
@@ -27,10 +27,21 @@ class BaseAgent(ABC):
         self.hands_played = 0
         self.total_winnings = 0
         self.player_id: Optional[int] = None
+        # Filled in by callers (EvalGate, OpponentAutoPlayWrapper, the play
+        # GUI) immediately after seating, so hand-coded anchor agents can
+        # read live game state (hole cards, board, pot, position). PPO and
+        # rule agents that act purely on the obs vector ignore this.
+        self._env: Optional[Any] = None
 
     def seat(self, player: "Player") -> None:
         """Bind this agent to a specific seat. Mirror of Player.seat_agent."""
         player.seat_agent(self)
+
+    def bind_env(self, env: Any) -> None:
+        """Give the agent a live reference to the env so it can inspect
+        game state from inside ``select_action``. No-op by default; anchor
+        agents override or simply read ``self._env`` after binding."""
+        self._env = env
 
     @abstractmethod
     def select_action(self, observation: np.ndarray, valid_actions: list) -> int:

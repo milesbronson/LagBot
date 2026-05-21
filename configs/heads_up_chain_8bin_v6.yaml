@@ -1,0 +1,94 @@
+# 8-bin heads-up chain v6 — true self-play curriculum.
+#
+# Same regret_blend reward + stratified pool as v5, with ONE change:
+#   opponents.anchors_seed_only: true
+#
+# The 10 scripted anchors now only DEFINE the style buckets and seed any
+# bucket that has no learned occupant yet. Every bucket that contains a
+# PPO card (we have 100+ now) drops its anchor, so the learner trains
+# against past versions of itself and its cousins — real self-play —
+# instead of the hand-coded archetypes. The anchors have done their job
+# (giving early generations a spread of styles to beat); from here the
+# bot learns to exploit its own former selves.
+#
+# Chains from run_20260521_004723_gen29 (registry gen 107), the latest
+# and most-evolved head of the v5 chain.
+#
+# Prerequisite (once): python scripts/seed_anchors.py
+
+environment:
+  num_players: 2
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+  raise_bins: [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0]
+
+training:
+  total_timesteps: 2000000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.05
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+reward:
+  mode: regret_blend
+  regret_lambda: 1.0
+
+opponents:
+  strategy: stratified_by_anchor
+  kind: null
+  fixed_ids: []
+  with_replacement: false
+  # Anchors define + seed strata only; PPO selves are the opponents
+  # wherever a stratum has any learned occupant.
+  anchors_seed_only: true
+
+continuation:
+  resume_from: run_20260521_004723_gen29
+  generations: 30
+
+eval_gate:
+  enabled: true
+  num_hands: 1000
+  threshold_mbb_per_100: -100.0
+  seed: 0
+
+stratified_eval_gate:
+  enabled: true
+  num_hands: 2000
+  per_stratum_threshold_mbb_per_100: -100.0
+  aggregate_threshold_mbb_per_100: -50.0
+  min_strata_to_pass: 6
+  cards_per_stratum: 1
+  seed: 0
+  include_anchors: true
+  max_retries: 2
+  retry_seed_offset: 1000
+
+regression_eval:
+  enabled: true
+  num_hands: 500
+  threshold_mbb_per_100: -100.0
+  seed: 0
+  include_fixtures: true
+
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+logging:
+  log_dir: "./logs/"
+  save_frequency: 100000
+  model_dir: "./models/"

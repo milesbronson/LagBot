@@ -10,6 +10,8 @@ performance unit, and a pass/fail decision against a configured
 threshold.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from src.agents.base_agent import BaseAgent
@@ -49,6 +51,7 @@ class EvalGate:
         small_blind: int = 5,
         big_blind: int = 10,
         seed: int = 0,
+        raise_bins: list[float] | None = None,
     ):
         if num_hands <= 0:
             raise ValueError("num_hands must be > 0")
@@ -58,13 +61,15 @@ class EvalGate:
         self.small_blind = small_blind
         self.big_blind = big_blind
         self.seed = seed
+        self.raise_bins = raise_bins
 
     def _build_env(self) -> TexasHoldemEnv:
         # track_opponents=True is mandatory: training (train.py:_build_env)
         # builds the env with tracking on, so saved PPO models expect a
         # 161-dim obs. Mismatching here makes every loaded PPO opponent
         # crash inside predict() and silently fall back to "call",
-        # producing a meaningless gate result.
+        # producing a meaningless gate result. Same applies to raise_bins:
+        # the gate env must mirror training's action space.
         return TexasHoldemEnv(
             num_players=2,
             starting_stack=self.starting_stack,
@@ -72,6 +77,7 @@ class EvalGate:
             big_blind=self.big_blind,
             track_opponents=True,
             learning_agent_id=0,
+            raise_bins=self.raise_bins,
         )
 
     def evaluate(
@@ -87,6 +93,8 @@ class EvalGate:
         env.game_state.players[1].seat_agent(predecessor)
         candidate.player_id = 0
         predecessor.player_id = 1
+        candidate.bind_env(env)
+        predecessor.bind_env(env)
         agents = [candidate, predecessor]
 
         obs, _ = env.reset(seed=self.seed)

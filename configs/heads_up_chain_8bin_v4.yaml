@@ -1,0 +1,95 @@
+# 8-bin heads-up chain v4 — regret_blend reward as the default.
+#
+# v3 was structurally identical to v1/v2 but added the three counter-
+# aggression anchors (Counterpuncher, Trapper, ThreeBetBully). It
+# still collapsed onto raise-everything: every gen converged to
+# fold~8%, raise~74%, AF~26. The pool composition was not the
+# bottleneck — the *reward signal* was. On-policy PPO with a profit-
+# only reward never sees the value of folding because the trajectory
+# is never actually played, so the critic cannot learn V(fold).
+#
+# v4 keeps the v3 pool but swaps the reward to:
+#     reward' = profit - 1.0 * max_regret
+# where max_regret is the deepest counterfactual fold-regret across
+# the learner's decision points in the hand (see
+# src/training/regret_reward_wrapper.py for derivation).
+#
+# Diagnostic run regret_test_v1 (1 gen, 2M steps) validated the
+# shape change: AF 25.9 -> 1.0, fold-to-3bet 1% -> 22%, stratified
+# gate PASS at +706k mbb/100 aggregate. v4 chains from there.
+#
+# Prerequisite (once): python scripts/seed_anchors.py
+
+environment:
+  num_players: 2
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+  raise_bins: [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0]
+
+training:
+  total_timesteps: 2000000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.05
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+reward:
+  mode: regret_blend
+  regret_lambda: 1.0
+
+opponents:
+  strategy: stratified_by_anchor
+  kind: null
+  fixed_ids: []
+  with_replacement: false
+
+continuation:
+  resume_from: regret_test_v1
+  generations: 50
+
+eval_gate:
+  enabled: true
+  num_hands: 1000
+  threshold_mbb_per_100: -100.0
+  seed: 0
+
+stratified_eval_gate:
+  enabled: true
+  num_hands: 2000
+  per_stratum_threshold_mbb_per_100: -100.0
+  aggregate_threshold_mbb_per_100: -50.0
+  min_strata_to_pass: 6
+  cards_per_stratum: 1
+  seed: 0
+  include_anchors: true
+  max_retries: 2
+  retry_seed_offset: 1000
+
+regression_eval:
+  enabled: true
+  num_hands: 500
+  threshold_mbb_per_100: -100.0
+  seed: 0
+  include_fixtures: true
+
+ppo:
+  policy: "MlpPolicy"
+  verbose: 1
+  tensorboard_log: "./logs/"
+
+logging:
+  log_dir: "./logs/"
+  save_frequency: 100000
+  model_dir: "./models/"

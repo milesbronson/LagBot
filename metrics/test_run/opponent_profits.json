@@ -4,21 +4,21 @@
       "name": "TestCallAgent",
       "type": "call",
       "hands_played": 10,
-      "total_profit": -0.1590151515151515,
-      "avg_profit": -0.01590151515151515,
-      "win_count": 0,
-      "loss_count": 10,
-      "win_rate": 0.0
+      "total_profit": 0.14583333333333334,
+      "avg_profit": 0.014583333333333334,
+      "win_count": 1,
+      "loss_count": 7,
+      "win_rate": 0.1
     },
     "2": {
       "name": "TestRandomAgent",
       "type": "random",
       "hands_played": 10,
-      "total_profit": -0.09598484848484848,
-      "avg_profit": -0.009598484848484847,
-      "win_count": 0,
-      "loss_count": 9,
-      "win_rate": 0.0
+      "total_profit": -0.0008333333333333357,
+      "avg_profit": -8.333333333333356e-05,
+      "win_count": 1,
+      "loss_count": 6,
+      "win_rate": 0.1
     }
   },
   "history": {
@@ -27,8 +27,8 @@
     ],
     "opponent_profits": [
       {
-        "1": -0.1590151515151515,
-        "2": -0.09598484848484848
+        "1": 0.14583333333333334,
+        "2": -0.0008333333333333357
       }
     ]
   }

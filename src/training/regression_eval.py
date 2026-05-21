@@ -13,6 +13,8 @@ shootout is reduced to ``num_hands=500`` here by default because it
 runs once per gen and across many opponents.
 """
 
+from __future__ import annotations
+
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -61,6 +63,7 @@ class RegressionEval:
         big_blind: int = 10,
         seed: int = 0,
         include_fixtures: bool = True,
+        raise_bins: list[float] | None = None,
     ):
         if num_hands <= 0:
             raise ValueError("num_hands must be > 0")
@@ -71,6 +74,7 @@ class RegressionEval:
         self.big_blind = big_blind
         self.seed = seed
         self.include_fixtures = include_fixtures
+        self.raise_bins = raise_bins
 
     def _instantiate(self, card: AgentCard) -> BaseAgent:
         if card.kind == "ppo":
@@ -79,6 +83,14 @@ class RegressionEval:
             return CallAgent(name=card.name)
         if card.kind == "random":
             return RandomAgent(name=card.name)
+        if card.kind == "anchor":
+            from src.agents.anchors import ALL_ANCHORS
+            for cls in ALL_ANCHORS:
+                if cls.ANCHOR_ID == card.id:
+                    return cls(name=card.name)
+            raise ValueError(
+                f"anchor card {card.id!r} has no matching AnchorAgent class"
+            )
         raise ValueError(f"unknown agent kind {card.kind!r}")
 
     def evaluate(
@@ -107,6 +119,7 @@ class RegressionEval:
             small_blind=self.small_blind,
             big_blind=self.big_blind,
             seed=self.seed,
+            raise_bins=self.raise_bins,
         )
 
         result = RegressionResult(

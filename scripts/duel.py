@@ -12,6 +12,9 @@ CHALLENGER / TESTER may be any of:
   - path to a model .zip file
   - path to a directory containing final_model.zip
   - "random" or "call" (rule agents)
+  - "anchor:<archetype>" — one of the hand-coded anchors. The archetype
+    can be the short name (e.g. ``shover``, ``tight_passive``) or the
+    full registry id (e.g. ``anchor_shover_v0``).
 
 Bin detection priority for each side:
   1. --{role}-bins "0.25,0.5,..."  (explicit CLI)
@@ -38,11 +41,29 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.agents.anchors import ALL_ANCHORS
 from src.agents.base_agent import BaseAgent
 from src.agents.random_agent import CallAgent, RandomAgent
 from src.agents.opponent_ppo import OpponentPPO
 from src.training.cross_bin_agent import CrossBinAgent
 from src.training.eval_gate import EvalGate
+
+
+def _resolve_anchor(key: str) -> BaseAgent:
+    """Accept either a full ANCHOR_ID (``anchor_shover_v0``) or a short
+    archetype name (``shover``, ``tight_passive``). Case-insensitive."""
+    k = key.strip().lower()
+    for cls in ALL_ANCHORS:
+        if k == cls.ANCHOR_ID.lower():
+            return cls()
+        # ARCHETYPE like "TightAggressive" → "tight_aggressive".
+        short = "".join(
+            ("_" + ch.lower()) if ch.isupper() else ch for ch in cls.ARCHETYPE
+        ).lstrip("_")
+        if k == short or k == cls.ARCHETYPE.lower():
+            return cls()
+    names = sorted(c.ANCHOR_ID for c in ALL_ANCHORS)
+    raise ValueError(f"unknown anchor {key!r}; known: {names}")
 
 
 # Bin sets we know we've trained against. Used only when --{role}-bins and
@@ -101,6 +122,11 @@ def _load_agent(
         return RandomAgent(name=f"{role}=Random"), None
     if spec.lower() == "call":
         return CallAgent(name=f"{role}=Call"), None
+    if spec.lower().startswith("anchor:") or spec.lower().startswith("anchor_"):
+        key = spec.split(":", 1)[1] if ":" in spec else spec
+        anchor = _resolve_anchor(key)
+        anchor.name = f"{role}={anchor.name}"
+        return anchor, None
 
     model_path = _resolve_model_path(spec)
     agent = OpponentPPO(model_path, name=f"{role}={Path(model_path).parent.name}")
