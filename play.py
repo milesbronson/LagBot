@@ -150,16 +150,16 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
     print("Texas Hold'em Poker - Flexible Betting + All-in")
     print("="*60)
     print(f"Players: You vs {num_opponents} bot(s)")
-    print(f"Bot actions: Fold, Call, Raise 50%/100%/200% pot, All-in")
+    print(f"Bot actions: Fold, Call, Raise 25%-500% pot (8 bins), All-in")
     print(f"Human actions: Fold, Call, Custom raise, All-in")
     print()
-    
+
     env = TexasHoldemEnv(
         num_players=num_players,
         starting_stack=1000,
         small_blind=5,
         big_blind=10,
-        raise_bins=[0.5, 1.0, 2.0],
+        raise_bins=[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0],
         include_all_in=True
     )
     

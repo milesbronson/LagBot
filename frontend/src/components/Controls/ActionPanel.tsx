@@ -17,8 +17,10 @@ export const ActionPanel: React.FC<ActionPanelProps> = ({ gameState, className =
 
   const callAmount = Math.max(0, gameState.current_bet - humanPlayer.bet);
   const canCheck = callAmount === 0;
-  const minRaise = Math.max(gameState.min_raise, gameState.big_blind);
   const maxRaise = humanPlayer.stack;
+  // Clamp: a short stack can face min_raise > stack, and a range input with
+  // min > max is undefined behavior (the slider sticks).
+  const minRaise = Math.min(Math.max(gameState.min_raise, gameState.big_blind), maxRaise);
   const canRaise = maxRaise > callAmount;
 
   const [raiseAmount, setRaiseAmount] = useState(minRaise);
@@ -32,7 +34,8 @@ export const ActionPanel: React.FC<ActionPanelProps> = ({ gameState, className =
   };
 
   const handleRaise = async (amount: number) => {
-    await submitPlayerAction({ action_type: 2, raise_amount: amount });
+    // Backend expects the TOTAL chips put in this action (call amount + raise on top)
+    await submitPlayerAction({ action_type: 2, raise_amount: Math.min(callAmount + amount, maxRaise) });
   };
 
   if (gameState.hand_complete) {

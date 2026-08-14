@@ -3,6 +3,7 @@ GameSession wrapper for TexasHoldemEnv with bot agent management.
 """
 import asyncio
 import logging
+import os
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import numpy as np
@@ -37,7 +38,7 @@ class GameSession:
             small_blind=small_blind,
             big_blind=big_blind,
             track_opponents=True,
-            raise_bins=[0.5, 1.0, 2.0],
+            raise_bins=[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0],
             include_all_in=True
         )
 
@@ -45,8 +46,19 @@ class GameSession:
         self.websocket_connections = []
         self._hand_actions: List[Dict] = []
         self._hand_starting_stacks: Dict[int, int] = {}
+        # Last completed hand's winnings, kept so a (re)connecting client
+        # can restore the result modal instead of a stuck "waiting" state.
+        self._last_winner_info: Optional[Dict] = None
+        # Reentry guard: a double-clicked "Next Hand" (or double-submitted
+        # action) must not interleave two env loops on the same session.
+        self._advancing = False
 
     def _find_latest_model(self) -> Optional[Path]:
+        # LAGBOT_MODEL overrides auto-discovery, e.g. models/BALANCED/final_model.zip
+        override = os.environ.get("LAGBOT_MODEL")
+        if override and Path(override).exists():
+            return Path(override)
+
         models_dir = Path("models")
         if not models_dir.exists():
             return None
@@ -73,18 +85,17 @@ class GameSession:
 
         if opponent_type == "trained":
             model_path = self._find_latest_model()
+            shared_agent = None
             if model_path:
-                for i in range(num_opponents):
-                    player_id = i + 1
-                    try:
-                        agent = OpponentPPO(str(model_path))
-                        agents[player_id] = agent
-                    except Exception as e:
-                        print(f"Failed to load model for player {player_id}: {e}")
-                        agents[player_id] = CallAgent()
-            else:
-                for i in range(num_opponents):
-                    agents[i + 1] = CallAgent()
+                # One torch model deserialization per session, shared across
+                # seats — loading a copy per opponent stalled the event loop
+                # for seconds and multiplied memory per "New Game".
+                try:
+                    shared_agent = OpponentPPO(str(model_path))
+                except Exception as e:
+                    print(f"Failed to load model {model_path}: {e}")
+            for i in range(num_opponents):
+                agents[i + 1] = shared_agent if shared_agent is not None else CallAgent()
 
         elif opponent_type == "call":
             for i in range(num_opponents):
@@ -161,8 +172,33 @@ class GameSession:
         except Exception as e:
             print(f"Failed to save hand to DB: {e}")
 
+    def _current_state_snapshot(self) -> Dict:
+        """Serialize the live state without stepping the env — used to
+        answer duplicate/racing requests without corrupting the session."""
+        hand_complete = self.env.game_state.is_hand_complete()
+        valid_actions = []
+        if not hand_complete and self.env.game_state.current_player_idx == self.human_player_id:
+            valid_actions = self.env.get_valid_actions()
+        return serialize_game_state(
+            self.env.game_state,
+            self.human_player_id,
+            valid_actions=valid_actions,
+            hand_complete=hand_complete,
+            winner_info=self._last_winner_info if hand_complete else None,
+        )
+
     async def start_hand(self) -> Dict:
+        if self._advancing:
+            return self._current_state_snapshot()
+        self._advancing = True
+        try:
+            return await self._start_hand_inner()
+        finally:
+            self._advancing = False
+
+    async def _start_hand_inner(self) -> Dict:
         self._hand_actions = []
+        self._last_winner_info = None
         obs, info = self.env.reset()
         self._snapshot_starting_stacks()
         done = False
@@ -174,6 +210,7 @@ class GameSession:
         winner_info = None
         if done:
             winner_info = info.get('winnings', {})
+            self._last_winner_info = winner_info
             logger.info(f"[{self.session_id}] Hand complete during start. Winners: {winner_info}")
             await self._save_hand_to_db(winner_info)
             await self._broadcast_current_state(hand_complete=True, winner_info=winner_info)
@@ -197,6 +234,19 @@ class GameSession:
         action_type: int,
         raise_amount: Optional[int] = None
     ) -> Dict:
+        if self._advancing:
+            return self._current_state_snapshot()
+        self._advancing = True
+        try:
+            return await self._execute_human_action_inner(action_type, raise_amount)
+        finally:
+            self._advancing = False
+
+    async def _execute_human_action_inner(
+        self,
+        action_type: int,
+        raise_amount: Optional[int] = None
+    ) -> Dict:
         logger.info(f"[{self.session_id}] Human action: type={action_type}, raise_amount={raise_amount}")
 
         if action_type == 0:
@@ -209,17 +259,16 @@ class GameSession:
             obs, reward, terminated, truncated, info = self.env.step(action_type)
         done = terminated or truncated
 
+        action_str = info.get("action", "unknown")
+        human_bet = self.env.game_state.players[self.human_player_id].current_bet
+        amount = 0 if action_str == "fold" else human_bet
         human_action = {
             "player_id": self.human_player_id,
             "player_name": "You",
-            "action": info.get("action", "unknown"),
-            "amount": self.env.game_state.players[self.human_player_id].current_bet,
+            "action": action_str,
+            "amount": amount,
         }
-        self._record_action(
-            self.human_player_id, "You",
-            info.get("action", "unknown"),
-            self.env.game_state.players[self.human_player_id].current_bet,
-        )
+        self._record_action(self.human_player_id, "You", action_str, amount)
         logger.info(f"[{self.session_id}] Human did: {info.get('action', 'unknown')}, done={done}")
 
         if not done:
@@ -230,6 +279,7 @@ class GameSession:
         winner_info = None
         if done:
             winner_info = info.get('winnings', {})
+            self._last_winner_info = winner_info
             logger.info(f"[{self.session_id}] Hand complete. Winners: {winner_info}")
             await self._save_hand_to_db(winner_info)
             await self._broadcast_current_state(hand_complete=True, winner_info=winner_info)
@@ -266,6 +316,8 @@ class GameSession:
 
             action_str = info.get("action", "unknown")
             bet_amount = self.env.game_state.players[current_player_id].current_bet
+            if action_str == "fold":
+                bet_amount = 0
             self._record_action(current_player_id, player_name, action_str, bet_amount)
             logger.info(f"[{self.session_id}] Bot {player_name} (id={current_player_id}): {action_str}, done={done}")
 

@@ -31,22 +31,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     session.add_websocket(websocket)
 
     try:
-        # Send initial state
-        from backend.utils.state_serializer import serialize_game_state
-        valid_actions = []
-        if session.env.game_state.current_player_idx == session.human_player_id:
-            valid_actions = session.env.get_valid_actions()
-
-        initial_state = serialize_game_state(
-            session.env.game_state,
-            session.human_player_id,
-            valid_actions=valid_actions,
-            hand_complete=False
-        )
-
+        # Send the REAL current state — hardcoding hand_complete=False here
+        # used to strand reconnecting clients in "waiting" with no modal —
+        # plus this hand's action log so a client that connected after the
+        # opening bot actions (always the case on hand #1) can backfill it.
         await websocket.send_json({
             "type": "connected",
-            "state": initial_state
+            "state": session._current_state_snapshot(),
+            "hand_actions": session._hand_actions,
         })
 
         # Keep connection open and listen for messages

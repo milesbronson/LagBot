@@ -1,6 +1,8 @@
 """
 REST API routes for poker game.
 """
+import asyncio
+
 from fastapi import APIRouter, HTTPException
 from backend.models.requests import NewGameRequest, ActionRequest
 from backend.models.responses import NewGameResponse, ErrorResponse
@@ -21,12 +23,15 @@ async def create_game(request: NewGameRequest):
         Session ID and initial game state
     """
     try:
-        session = game_manager.create_session(
+        # Session construction deserializes a torch model — run it off the
+        # event loop so other requests/WebSockets don't stall for seconds.
+        session = await asyncio.to_thread(
+            game_manager.create_session,
             num_opponents=request.num_opponents,
             opponent_type=request.opponent_type,
             starting_stack=request.starting_stack,
             small_blind=request.small_blind,
-            big_blind=request.big_blind
+            big_blind=request.big_blind,
         )
 
         state = await session.start_hand()

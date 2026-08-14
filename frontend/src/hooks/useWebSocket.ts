@@ -29,10 +29,34 @@ export function useWebSocket(sessionId: string | null) {
 
         if (data.type === 'connected') {
           setGameState(data.state);
+          // Backfill this hand's action log (the socket connects after the
+          // opening bot actions on hand #1, and on any reconnect).
+          if (Array.isArray(data.hand_actions)) {
+            useGameStore.setState({
+              currentHandActions: data.hand_actions.map((a: any) => ({
+                player_id: a.player_id,
+                player_name: a.player_name,
+                action: a.action_type,
+                amount: a.amount,
+                street: a.betting_round,
+              })),
+            });
+          }
         } else if (data.type === 'state_update') {
           const currentState = useGameStore.getState().gameState;
-          if (currentState?.hand_complete && !data.state.hand_complete) {
-            return;
+          // Drop only genuinely stale broadcasts: an earlier hand, or an
+          // out-of-order mid-hand update after this hand already completed.
+          // (The old hand_complete-only guard also swallowed every opening
+          // bot action of the NEXT hand while the result modal was up.)
+          if (currentState) {
+            if (data.state.hand_number < currentState.hand_number) return;
+            if (
+              data.state.hand_number === currentState.hand_number &&
+              currentState.hand_complete &&
+              !data.state.hand_complete
+            ) {
+              return;
+            }
           }
           setGameState(data.state);
 

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { GameState, ActionHistoryEntry, OpponentStats } from '../types/game';
 import { Action, NewGameRequest } from '../types/action';
-import { createGame, submitAction, startNewHand, getOpponentStats } from '../api/client';
+import { createGame, submitAction, startNewHand, getOpponentStats, deleteGame } from '../api/client';
 
 interface LastAction {
   player_id: number;
@@ -59,6 +59,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
   createNewGame: async (request: NewGameRequest) => {
     try {
       set({ isLoading: true, error: null });
+      // Sessions are held in backend memory forever otherwise — release the
+      // old one (each holds a loaded torch model) before starting fresh.
+      const oldSession = get().sessionId;
+      if (oldSession) {
+        deleteGame(oldSession).catch(() => {});
+      }
       const response = await createGame(request);
       set({
         sessionId: response.session_id,

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { GameState } from '../../types/game';
 import { formatCurrency } from '../../utils/formatting';
 
@@ -11,9 +11,22 @@ export const HandResultModal: React.FC<HandResultModalProps> = ({
   gameState,
   onNextHand,
 }) => {
+  const [starting, setStarting] = useState(false);
+
+  // Re-arm the button whenever a fresh completed hand is shown.
+  useEffect(() => {
+    setStarting(false);
+  }, [gameState.hand_number]);
+
   if (!gameState.hand_complete || !gameState.winner_info) {
     return null;
   }
+
+  const handleNextHand = () => {
+    if (starting) return; // double-click guard
+    setStarting(true);
+    onNextHand();
+  };
 
   const winners = Object.entries(gameState.winner_info)
     .filter(([_, amount]) => amount > 0)
@@ -53,10 +66,11 @@ export const HandResultModal: React.FC<HandResultModalProps> = ({
         </div>
 
         <button
-          onClick={onNextHand}
-          className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg"
+          onClick={handleNextHand}
+          disabled={starting}
+          className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white font-bold rounded-lg"
         >
-          Next Hand
+          {starting ? 'Dealing…' : 'Next Hand'}
         </button>
       </div>
     </div>

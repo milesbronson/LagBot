@@ -11,6 +11,7 @@ interface PokerTableSeatProps {
   position: { x: number; y: number };
   compact?: boolean;
   className?: string;
+  handComplete?: boolean;
 }
 
 export const PokerTableSeat: React.FC<PokerTableSeatProps> = ({
@@ -19,6 +20,7 @@ export const PokerTableSeat: React.FC<PokerTableSeatProps> = ({
   position,
   compact = false,
   className = '',
+  handComplete = false,
 }) => {
   return (
     <div
@@ -34,7 +36,7 @@ export const PokerTableSeat: React.FC<PokerTableSeatProps> = ({
 
         <HoleCards
           cards={player.hole_cards}
-          showCards={player.is_human || !player.is_active}
+          showCards={player.is_human || (handComplete && !player.is_folded)}
         />
 
         <PlayerInfo player={player} compact={compact} />

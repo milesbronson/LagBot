@@ -35,7 +35,14 @@ export const PokerTable: React.FC<PokerTableProps> = ({ gameState, className = '
         }}
       >
         <CommunityCards cards={gameState.community_cards} />
-        {gameState.pot > 0 && <PotDisplay amount={gameState.pot} />}
+        {/* Backend pot already includes the current street's bets, which are
+            also drawn as chips in front of each seat — subtract them so the
+            same chips aren't shown twice. */}
+        {(() => {
+          const committed =
+            gameState.pot - gameState.players.reduce((s, p) => s + p.bet, 0);
+          return committed > 0 && <PotDisplay amount={committed} />;
+        })()}
         <div className="text-white text-xs opacity-60">
           {gameState.betting_round}
         </div>
@@ -74,6 +81,7 @@ export const PokerTable: React.FC<PokerTableProps> = ({ gameState, className = '
             isCurrentPlayer={gameState.current_player_idx === player.player_id}
             position={position}
             compact={compact}
+            handComplete={gameState.hand_complete}
           />
         );
       })}

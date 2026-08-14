@@ -54,7 +54,24 @@ WIN_H = 720
 
 def load_registry_models():
     """Returns sorted list of (card_id, absolute_path) for PPO cards with
-    a model file on disk."""
+    a model file on disk. Falls back to scanning models/*/ when there is
+    no registry.json (e.g. a fresh clone with copied-in checkpoints)."""
+    if not REGISTRY_PATH.exists():
+        out = []
+        models_dir = ROOT / "models"
+        if models_dir.exists():
+            for d in sorted(models_dir.iterdir()):
+                for name in ("best_model.zip", "final_model.zip"):
+                    if (d / name).exists():
+                        out.append((d.name, str(d / name)))
+                        break
+        if not out:
+            raise SystemExit(
+                f"No {REGISTRY_PATH} and no model zips under {models_dir}.\n"
+                "Train a model first (see README) or point this checkout's "
+                "models/ at an existing model directory."
+            )
+        return out
     with open(REGISTRY_PATH) as f:
         reg = json.load(f)
     out = []
