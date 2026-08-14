@@ -25,6 +25,38 @@ Bet: $0, Min Raise: $10
 
 ---
 
+## Results
+
+The current champion — **generation 29 of the v6 self-play chain** — was benchmarked head-to-head with [`scripts/duel.py`](scripts/duel.py), 2,000 hands per match (heads-up, 5/10 blinds, 1,000-chip stacks, fixed seed):
+
+![Champion win rate by opponent: +3,384 BB/100 vs always-call, +3,227 vs random, +1,225 vs its generation-0 ancestor, +79 vs a tight-passive anchor](docs/images/duel_results.png)
+
+| Opponent | Result (BB/100) | Verdict |
+|----------|----------------:|---------|
+| Always-call bot | **+3,384** | crushes it |
+| Random bot | **+3,227** | crushes it |
+| Generation 0 (its own self-play ancestor) | **+1,225** | clear improvement across the chain |
+| Tight-passive anchor (scripted pro archetype) | **+79** | solid edge vs a competent strategy |
+
+The pattern is what you want from a learned policy: enormous edges against exploitable opponents, and a smaller but consistent edge against the hardest scripted archetype. Every number is reproducible:
+
+```bash
+python scripts/duel.py models/heads_up_chain_8bin_v6_gen29 call --num-hands 2000 --seed 1
+```
+
+### By the numbers
+
+| Metric | Value |
+|--------|------:|
+| PPO generations trained across all lineages | **149** |
+| Training timesteps per generation | 2,000,000 |
+| Cumulative training timesteps | **~300M** |
+| Scripted anchor archetypes in the opponent pool | 10 |
+| Observation dimensions (incl. live opponent HUD stats) | 161 |
+| Automated tests | **503** |
+
+---
+
 ## Quick Start
 
 ### Environment setup
@@ -111,7 +143,7 @@ flowchart LR
     BE --> DB
 ```
 
-Each training run saves checkpoints into an agent registry; later runs sample opponents from that pool — frozen past models, scripted **anchor agents** (tight-passive, loose-aggressive, calling station, …), and simple baselines — so the bot keeps facing a curriculum of stronger and more varied opposition. An **eval gate** decides whether a new checkpoint is actually an improvement before it graduates into the pool.
+Each training run saves its checkpoint into an agent registry; later runs sample opponents from that pool — frozen past generations, scripted **anchor agents**, and simple baselines — so the bot keeps facing a curriculum of stronger and more varied opposition. An **eval gate** makes each generation beat its parent head-to-head before it graduates into the pool, which is why the chain improves monotonically enough that generation 29 beats generation 0 by **+1,225 BB/100**.
 
 ---
 
@@ -134,7 +166,7 @@ Each training run saves checkpoints into an agent registry; later runs sample op
 | 4 | Raise 200% of pot |
 | 5 | All-in |
 
-Raise sizes are computed from the live pot, rounded to the big blind, floored at the min-raise, and clamped to the stack. The bins are configurable via `raise_bins` / `set_raise_bins()`.
+Raise sizes are computed from the live pot, rounded to the big blind, floored at the min-raise, and clamped to the stack. The bins are configurable via `raise_bins` / `set_raise_bins()` — the latest self-play chains train with **8 bins** (25%–500% of pot) for finer bet sizing, and `duel.py` bridges models trained on different bin sets so any two generations can play each other.
 
 ### 👁️ Observation space (`Box(161,)`)
 - **53 base dims** — 7 cards × 6 dims (rank + suit one-hot + presence), Monte-Carlo **hand strength**, **pot odds**, **stack-to-pot ratio**, plus normalized stack / pot / bet / to-call, position, street, and button
@@ -144,9 +176,10 @@ Raise sizes are computed from the live pot, rounded to the big blind, floored at
 The `OpponentTracker` maintains a full HUD profile per player, classifies opponents into player types (TAG, LAG, nit, calling station), and can surface exploitation suggestions. Its stats stream into both the agent's observations and the terminal/web display.
 
 ### 🧪 Training machinery
-- **Self-play opponent sampling** from a registry of past checkpoints and rule-based anchors
-- **Regret-shaped rewards** (configurable modes) on top of the base big-blinds-won-per-hand signal
-- **Eval gate** with regression checks before a checkpoint joins the opponent pool
+- **Generational self-play**: 149 PPO generations trained so far. Ten scripted anchor archetypes (tight-passive, loose-aggressive, calling station, shover, …) define style buckets and seed the early curriculum; once a bucket has a learned occupant, the anchor retires and the bot trains against past versions of itself — true self-play with style diversity guaranteed
+- **Stratified opponent sampling** from a persistent JSON agent registry that records every checkpoint's lineage, training steps, and observed stats
+- **Regret-shaped rewards** (`regret_blend` mode) layered on the base big-blinds-won-per-hand signal
+- **Eval gate**: a new checkpoint must beat its parent head-to-head (same code path as `duel.py`) before it graduates into the opponent pool
 - TensorBoard logging plus JSON metrics and dashboard generation (`scripts/dashboard_gen.py`)
 
 ![Training dashboard — learning curve, action distribution, loss, and run summary](docs/images/dashboard_deep_arch_3M_clean.png)
