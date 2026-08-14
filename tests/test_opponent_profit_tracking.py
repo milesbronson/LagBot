@@ -3,9 +3,6 @@
 Quick test to verify opponent profit tracking works
 """
 
-import sys
-sys.path.insert(0, '/Users/mbb/Developer/Personal_Projects/LagBot')
-
 from src.poker_env.texas_holdem_env import TexasHoldemEnv
 from src.agents.ppo_agent import PPOAgent
 from src.agents.random_agent import CallAgent, RandomAgent

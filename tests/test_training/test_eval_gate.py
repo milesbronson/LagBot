@@ -51,7 +51,8 @@ class TestEvaluate:
         assert isinstance(result, EvalResult)
         assert result.candidate_id == "cand"
         assert result.predecessor_id == "pred"
-        assert result.hands_played == 5
+        # duplicate scoring plays each dealt hand twice (once per seat)
+        assert result.hands_played == 10
         assert result.big_blind == 10
 
     def test_fold_agent_loses_against_call_agent(self):
@@ -83,7 +84,25 @@ class TestEvaluate:
         # match it's not a bug, so just sanity-check the call works.
         r1 = EvalGate(num_hands=5, seed=1).evaluate(FixedAgent("a"), FixedAgent("b"))
         r2 = EvalGate(num_hands=5, seed=999).evaluate(FixedAgent("a"), FixedAgent("b"))
-        assert r1.hands_played == r2.hands_played == 5
+        assert r1.hands_played == r2.hands_played == 10
+
+    def test_duplicate_mirror_nets_zero_for_identical_policies(self):
+        # With duplicate scoring, the mirror pass replays the identical
+        # decks with seats swapped, so a policy playing against itself
+        # must net exactly zero chips.
+        result = EvalGate(num_hands=8, seed=11).evaluate(
+            FixedAgent("a"), FixedAgent("b")
+        )
+        assert result.candidate_profit_chips == 0
+
+    def test_global_rng_state_restored_after_evaluate(self):
+        # The gate seeds the process-global RNGs per hand; it must restore
+        # them so a mid-training eval doesn't reset the training deck stream.
+        import random as _random
+        _random.seed(12345)
+        before = _random.getstate()
+        EvalGate(num_hands=3, seed=1).evaluate(FixedAgent("a"), FixedAgent("b"))
+        assert _random.getstate() == before
 
 
 class TestPasses:
@@ -315,5 +334,5 @@ class TestSerialization:
         assert set(d.keys()) == {
             "candidate_id", "predecessor_id", "hands_played",
             "candidate_profit_chips", "big_blind", "mbb_per_100",
-            "candidate_wins", "candidate_losses",
+            "candidate_wins", "candidate_losses", "passed",
         }

@@ -278,7 +278,11 @@ class OpponentProfile:
             1 for a in self.recent_actions 
             if a['action'] == 'call'
         )
-        self.af = bets_raises / max(calls, 1) if calls > 0 else 1.0
+        # With zero calls in the window, a player who is still betting and
+        # raising is a pure aggressor — AF must read high, not neutral.
+        # (The old `else 1.0` fallback scored an always-raise maniac as a
+        # perfectly balanced 1.0.)
+        self.af = bets_raises / calls if calls > 0 else float(bets_raises)
     
     def to_dict(self) -> Dict:
         """Convert to dictionary for serialization"""

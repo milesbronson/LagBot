@@ -78,6 +78,13 @@ def summary_table(
             last_win_rate = win[-1] if win else None
             timesteps = ts[-1] if ts else 0
 
+        # Cards registered before EvalResult carried `passed` (pre-2026-08)
+        # only stored mbb_per_100; infer against the default 0.0 threshold
+        # so the column isn't blank for the whole historical chain.
+        passed = eval_stats.get("passed")
+        if passed is None and eval_stats.get("mbb_per_100") is not None:
+            passed = eval_stats["mbb_per_100"] >= 0.0
+
         rows.append({
             "id": card.id,
             "generation": card.generation,
@@ -85,7 +92,7 @@ def summary_table(
             "trained_against": card.trained_against_ids,
             "total_timesteps": card.total_timesteps or timesteps,
             "eval_mbb_per_100": eval_stats.get("mbb_per_100"),
-            "eval_passed": eval_stats.get("passed"),
+            "eval_passed": passed,
             "last_avg_reward_100": last_avg_reward,
             "last_win_rate": last_win_rate,
         })

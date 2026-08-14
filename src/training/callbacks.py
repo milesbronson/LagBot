@@ -620,6 +620,7 @@ class BestCheckpointCallback(BaseCallback):
         small_blind: int = 5,
         big_blind: int = 10,
         seed: int = 0,
+        raise_bins: Optional[List[float]] = None,
         verbose: int = 1,
     ):
         super().__init__(verbose)
@@ -632,6 +633,10 @@ class BestCheckpointCallback(BaseCallback):
         self.small_blind = small_blind
         self.big_blind = big_blind
         self.seed = seed
+        # Must mirror the training env's bins: a gate env left on the
+        # 3-bin default coerces every 8-bin action >= 6 to a call and
+        # scores checkpoints on a distorted match.
+        self.raise_bins = raise_bins
         self.best_mbb_per_100: float = -float("inf")
         self.best_steps: Optional[int] = None
         self.best_stats: Optional[dict] = None
@@ -658,6 +663,7 @@ class BestCheckpointCallback(BaseCallback):
             small_blind=self.small_blind,
             big_blind=self.big_blind,
             seed=self.seed,
+            raise_bins=self.raise_bins,
         )
         result = gate.evaluate(
             candidate, predecessor,

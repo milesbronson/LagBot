@@ -77,7 +77,12 @@ def _build_fixture(tmp_path: Path) -> tuple[str, str]:
     return str(tmp_path / "registry.json"), str(mdir)
 
 
-def test_dashboard_renders_all_tabs_without_exception(tmp_path):
+def test_dashboard_landing_renders_without_exception(tmp_path):
+    # The dashboard is a multi-page Streamlit app: this exercises the
+    # landing page (Registry overview). The per-page views under
+    # scripts/pages/ are covered by their own smoke tests / existence
+    # check below. (The old 4-tab single-file layout this test once
+    # asserted on no longer exists.)
     registry_path, metrics_dir = _build_fixture(tmp_path)
 
     at = AppTest.from_file(DASHBOARD, default_timeout=30)
@@ -90,13 +95,17 @@ def test_dashboard_renders_all_tabs_without_exception(tmp_path):
 
     assert len(at.exception) == 0, f"dashboard raised: {at.exception}"
     assert len(at.error) == 0, f"dashboard surfaced errors: {at.error}"
-    assert len(at.tabs) == 4, f"expected 4 tabs, got {len(at.tabs)}"
+    # Landing page structure: grouping radio + at least one run table.
+    assert len(at.radio) >= 1, "expected the run-grouping radio"
+    assert len(at.dataframe) >= 1, "expected at least one registry table"
+    titles = [t.value for t in at.title]
+    assert any("Registry overview" in t for t in titles)
 
-    headers = [h.value for h in at.header]
-    assert any("Registry overview" in h for h in headers)
-    assert any("Training curves" in h for h in headers)
-    assert any("Per-street action breakdown" in h for h in headers)
-    assert any("Critic calibration" in h for h in headers)
+
+def test_dashboard_pages_exist():
+    pages_dir = Path(DASHBOARD).parent / "pages"
+    pages = sorted(p.name for p in pages_dir.glob("*.py"))
+    assert len(pages) >= 7, f"expected the 7 dashboard pages, got {pages}"
 
 
 def test_dashboard_shows_error_when_registry_missing(tmp_path):

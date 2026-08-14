@@ -61,9 +61,12 @@ import re as _re  # noqa: E402
 
 
 def _run_of(card_id: str) -> str:
-    """Strip trailing `_genN` so cards group by training run."""
-    m = _re.match(r"^(.*?_v\d+)(?:_gen\d+)?$", card_id or "")
-    return m.group(1) if m else (card_id or "")
+    """Strip trailing `_genN` so cards group by training run.
+
+    Handles both id styles in the registry: `..._v6_gen29` and
+    `run_20260521_004723_gen13` (the old `_v\\d+`-anchored regex missed the
+    latter, exploding the landing page into one expander per card)."""
+    return _re.sub(r"_gen\d+$", "", card_id or "")
 
 
 df = pd.DataFrame(rows)

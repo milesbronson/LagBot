@@ -45,13 +45,20 @@ class TexasHoldemEnv(gym.Env):
         include_all_in: bool = True,
         reset_stacks_every_n_timesteps: Optional[int] = None,
         track_opponents: bool = True,
-        learning_agent_id: int = 0
+        learning_agent_id: int = 0,
+        real_postflop_equity: bool = False,
     ):
         """
         Args:
             raise_bins: List of pot percentages (e.g., [0.5, 1.0, 2.0])
             include_all_in: If True, add all-in as last action
             track_opponents: If True, include opponent stats in observation (68 dims vs 32)
+            real_postflop_equity: If True, the hand_strength obs feature uses
+                Monte-Carlo equity on flop/turn/river. Defaults to False
+                because every checkpoint trained before 2026-08 saw a
+                constant 0.5 post-flop (a silent treys API bug) and their
+                policies collapse when fed real values — flip this on only
+                for a fresh training lineage (config key of the same name).
         """
         super().__init__()
         
@@ -103,6 +110,7 @@ class TexasHoldemEnv(gym.Env):
                 f"learning_agent_id={learning_agent_id} must be in [0, {num_players})"
             )
         self.learning_agent_id = learning_agent_id
+        self.real_postflop_equity = real_postflop_equity
         self.opponent_tracker = OpponentTracker(max_history_hands=1000)
         self.player_positions = {}
 
@@ -537,21 +545,24 @@ class TexasHoldemEnv(gym.Env):
         Returns:
             float: Hand equity between 0.0 and 1.0
         """
-        # Check cache
-        board_state = tuple(community_cards)
-        street = self.game_state.betting_round.value
-
-        if self._last_board_state == board_state:
-            cached_equity = self._hand_strength_cache.get(street)
-            if cached_equity is not None:
-                return cached_equity
-
-        # Update cache state
-        self._last_board_state = board_state
-
         # Handle edge cases
         if not hole_cards or len(hole_cards) < 2:
             return 0.5
+
+        # Legacy compatibility: checkpoints trained before 2026-08 only ever
+        # saw 0.5 here post-flop (silent treys bug) and their policies are
+        # calibrated to it — a regression duel showed the champion dropping
+        # from +3,384 to -1,822 BB/100 vs a call bot when fed real equity.
+        if not self.real_postflop_equity and any(c != 0 for c in community_cards):
+            return 0.5
+
+        # Cache must be keyed on the player's own hole cards, not just the
+        # board: both seats compute equity on the same street, and a
+        # board-only key hands seat 1 the equity of seat 0's hand.
+        cache_key = (tuple(hole_cards[:2]), tuple(community_cards))
+        cached_equity = self._hand_strength_cache.get(cache_key)
+        if cached_equity is not None:
+            return cached_equity
 
         # Convert to Treys format
         try:
@@ -568,7 +579,7 @@ class TexasHoldemEnv(gym.Env):
                 pair = 1.0 if r1 == r2 else 0.0
                 equity = 0.3 + (high_card * 0.4) + (pair * 0.2)
                 equity = max(0.0, min(1.0, equity))  # Clamp to [0, 1]
-                self._hand_strength_cache[street] = equity
+                self._hand_strength_cache[cache_key] = equity
                 return equity
 
             # Monte Carlo simulation for flop/turn/river
@@ -576,34 +587,33 @@ class TexasHoldemEnv(gym.Env):
             ties = 0
             n_simulations = 200
 
-            # Get hero's hand score with current board
-            hero_score = self.treys_evaluator.evaluate(board, hero_hand)
-
-            # Simulate random opponent hands
             for _ in range(n_simulations):
                 # Create deck without hero's cards and board
                 deck = Deck()
                 used_cards = set(hero_hand + board)
 
-                # Draw random opponent hand
+                # Draw random opponent hand (treys draw(1) returns a list)
                 opp_hand = []
                 for _ in range(2):
-                    card = deck.draw(1)
+                    card = deck.draw(1)[0]
                     while card in used_cards:
-                        card = deck.draw(1)
+                        card = deck.draw(1)[0]
                     opp_hand.append(card)
                     used_cards.add(card)
 
                 # Complete the board if needed
                 sim_board = board[:]
                 while len(sim_board) < 5:
-                    card = deck.draw(1)
+                    card = deck.draw(1)[0]
                     while card in used_cards:
-                        card = deck.draw(1)
+                        card = deck.draw(1)[0]
                     sim_board.append(card)
                     used_cards.add(card)
 
-                # Evaluate opponent's hand
+                # Both hands must be scored on the SAME completed board;
+                # comparing hero-on-flop vs opponent-on-river ranks are
+                # incomparable treys scores.
+                hero_score = self.treys_evaluator.evaluate(sim_board, hero_hand)
                 opp_score = self.treys_evaluator.evaluate(sim_board, opp_hand)
 
                 # Compare scores (lower is better in Treys)
@@ -614,11 +624,16 @@ class TexasHoldemEnv(gym.Env):
 
             equity = (wins + ties * 0.5) / n_simulations
             equity = max(0.0, min(1.0, equity))  # Clamp to [0, 1]
-            self._hand_strength_cache[street] = equity
+            self._hand_strength_cache[cache_key] = equity
             return equity
 
         except Exception as e:
-            # Fallback to 0.5 if calculation fails
+            # Fallback to 0.5 if calculation fails — but never silently:
+            # a quiet fallback here once zeroed out the post-flop equity
+            # feature for entire training runs.
+            if not getattr(self, "_equity_error_reported", False):
+                self._equity_error_reported = True
+                print(f"WARNING: hand-strength calc failed, using 0.5 fallback: {e!r}")
             return 0.5
 
     def _calculate_pot_odds(self, player) -> float:

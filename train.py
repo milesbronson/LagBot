@@ -174,6 +174,10 @@ def _build_env(env_cfg: dict) -> TexasHoldemEnv:
         reset_stacks_every_n_timesteps=env_cfg.get("reset_stacks_every_n_timesteps"),
         raise_bins=env_cfg.get("raise_bins"),
         track_opponents=True,
+        # Off by default: pre-2026-08 checkpoints were trained on a constant
+        # 0.5 post-flop hand_strength and collapse when fed real equity.
+        # Enable only when starting a fresh lineage.
+        real_postflop_equity=env_cfg.get("real_postflop_equity", False),
     )
 
 
@@ -457,6 +461,7 @@ def train_one_generation(
             small_blind=env_cfg["small_blind"],
             big_blind=env_cfg["big_blind"],
             seed=eval_cfg.get("seed", 0),
+            raise_bins=env_cfg.get("raise_bins"),
         )
 
     callbacks = [save_callback, metrics_callback, profit_callback, critic_callback]

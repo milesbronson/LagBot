@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-seed_anchors.py — idempotently register the seven hand-coded anchor
+seed_anchors.py — idempotently register the ten hand-coded anchor
 archetypes into the AgentRegistry.
 
 The anchors form the backbone of the opponent pool and the centroids of
