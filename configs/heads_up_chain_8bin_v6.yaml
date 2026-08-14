@@ -55,7 +55,7 @@ opponents:
   anchors_seed_only: true
 
 continuation:
-  resume_from: run_20260521_004723_gen29
+  resume_from: run_20260521_122309_gen13
   generations: 30
 
 eval_gate:
