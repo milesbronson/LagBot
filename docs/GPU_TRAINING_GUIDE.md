@@ -1,5 +1,7 @@
 # GPU-Accelerated Training Guide for LagBot
 
+> **⚠️ Historical (pre-May-2026).** This guide predates the current pipeline (uv + `pyproject.toml`, agent registry, anchor curriculum, eval gate, 8-bin actions). Commands and paths below may be stale — the README is the source of truth for setup, training, and play.
+
 ## System Detected: Apple M4 Pro with Metal Performance Shaders (MPS)
 
 Your Apple Silicon Mac will use **MPS (Metal Performance Shaders)** for GPU acceleration, which can provide **3-5x speedup** compared to CPU training.

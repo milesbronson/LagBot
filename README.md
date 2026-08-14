@@ -44,6 +44,10 @@ The pattern is what you want from a learned policy: enormous edges against explo
 python scripts/duel.py models/heads_up_chain_8bin_v6_gen29 call --num-hands 2000 --seed 1
 ```
 
+(Checkpoints aren't committed — they're large and regenerable from
+`configs/`; the duel command assumes a `models/` directory from your own
+training runs.)
+
 ### By the numbers
 
 | Metric | Value |
@@ -99,6 +103,15 @@ uv run python train.py --config configs/default_config.yaml --name my_run
 
 ```bash
 PYTHONPATH=. uv run python play.py
+```
+
+### Play via Desktop App
+
+A native single-window heads-up table (tkinter — no servers needed), with a
+toolbar picker listing every trained checkpoint in the agent registry:
+
+```bash
+uv run python play_app/play.py
 ```
 
 ### Run tests

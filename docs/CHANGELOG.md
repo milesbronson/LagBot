@@ -2,6 +2,42 @@
 
 History of significant changes and fixes to LagBot.
 
+> Note: entries are historical — numbers like observation dims reflect the
+> code *at that date*. Current architecture (see README): 161-dim obs =
+> 53 base + 9 opponents × 12 HUD features.
+
+---
+
+## 2026-08-14: Audit fixes — silent equity bug, eval-gate action space, web UI
+
+**Post-flop hand equity was a constant 0.5 in every observation** (silent
+`treys` API bug: `deck.draw(1)` returns a list; the resulting `TypeError`
+was swallowed by a bare `except` that returned 0.5). Every checkpoint in the
+registry was trained on that constant. The Monte-Carlo path is fixed
+(per-player cache key, both hands scored on the same completed board), but a
+regression duel showed existing champions collapse from +3,384 to −1,822
+BB/100 when suddenly fed real equity — so the fix is gated behind a new env
+flag `real_postflop_equity` (config key of the same name), default **off**.
+Flip it on only for a fresh training lineage.
+
+**`BestCheckpointCallback` promoted checkpoints in the wrong action space** —
+it built its `EvalGate` without `raise_bins`, so 8-bin candidates were scored
+in a 6-action env where actions ≥ 6 silently became calls. `raise_bins` now
+threads through from the training config.
+
+**EvalGate duplicate (mirrored-seat) scoring finished**: per-hand deck
+seeding replays identical decks with seats swapped so card luck and seat bias
+cancel; global RNG state and agents' `deterministic` flags are saved/restored
+around evals; `EvalResult` now records `passed`.
+
+**Web UI**: Raise slider sent the raise portion without the call amount
+("Raise" often executed as a call, and could silently fold after a short
+all-in); showdown now reveals bot hole cards on the table; WebSocket guard is
+hand-number-aware (opening bot actions of a new hand are no longer dropped);
+reconnect payload reports the real hand state and replays the action log;
+one shared model instance per session, loaded off the event loop; "Next
+Hand" double-click guard; pot display no longer double-counts live bets.
+
 ---
 
 ## 2026-02-25: Multi-Player Frontend + Backend Overhaul

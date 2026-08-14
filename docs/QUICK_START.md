@@ -1,5 +1,7 @@
 # LagBot Poker - Quick Start Guide
 
+> **⚠️ Historical (pre-May-2026).** This guide predates the current pipeline (uv + `pyproject.toml`, agent registry, anchor curriculum, eval gate, 8-bin actions). Commands and paths below may be stale — the README is the source of truth for setup, training, and play.
+
 ## 30-Second Setup
 
 ```bash
