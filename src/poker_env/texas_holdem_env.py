@@ -6,7 +6,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 from typing import Tuple, Dict, Any, Optional, List
-from treys import Card, Evaluator, Deck
+from treys import Evaluator, Deck
 
 from src.poker_env.game_state import GameState, BettingRound
 from src.poker_env.hand_evaluator import HandEvaluator
@@ -441,39 +441,6 @@ class TexasHoldemEnv(gym.Env):
             if idx < len(self.raise_bins):
                 return f"Raise {self.raise_bins[idx]*100:.0f}% pot"
         return f"Action {action}"
-    
-    def step_with_raise(self, action: int, raise_amount: Optional[int] = None) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        """Execute action with custom raise amount (for humans)"""
-        current_player = self.game_state.get_current_player()
-        starting_stack = current_player.starting_stack_this_hand
-
-        action_type = self.game_state.execute_action(action, raise_amount)
-
-        if self.game_state.is_betting_round_complete():
-            if not self.game_state.is_hand_complete():
-                self.game_state.advance_betting_round()
-                while not self.game_state.is_hand_complete():
-                    active = self.game_state.get_active_players()
-                    if any(not p.is_all_in for p in active):
-                        break
-                    self.game_state.advance_betting_round()
-
-        done = self.game_state.is_hand_complete()
-        reward = 0.0
-        info = {'action': action_type}
-
-        if done:
-            winnings = self.game_state.determine_winners()
-            # FIX: Calculate reward for the agent being trained (player 0)
-            learning_agent = self.game_state.players[self.learning_agent_id]
-            agent_starting_stack = learning_agent.starting_stack_this_hand
-            reward = float(learning_agent.stack - agent_starting_stack)
-            info['winnings'] = winnings
-            info['hand_complete'] = True
-        
-        terminated = done
-        truncated = False
-        return self._get_observation(), reward, terminated, truncated, info
     
     def _get_observation(self) -> np.ndarray:
         """Get observation vector (53 base + 72 opponent stats if tracking = 125 total)

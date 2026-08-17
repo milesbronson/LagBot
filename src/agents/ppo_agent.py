@@ -198,9 +198,3 @@ class TrainingCallback(BaseCallback):
         
         return True
     
-    def _on_rollout_end(self) -> None:
-        """
-        Called at the end of each rollout
-        """
-        # Log custom metrics if needed
-        pass

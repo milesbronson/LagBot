@@ -251,7 +251,7 @@ def play_game(model_path: str = None, num_opponents: int = 1, opponent_type: str
                         done = terminated or truncated
                         print(f"\nYou called/checked")
                     else:
-                        obs, reward, terminated, truncated, info = env.step_with_raise(2, custom_amount)
+                        obs, reward, terminated, truncated, info = env.step_with_amount(2, custom_amount)
                         done = terminated or truncated
                         print(f"\nYou raised/went all-in")
                 

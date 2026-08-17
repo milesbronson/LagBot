@@ -4,9 +4,8 @@ Track profit/loss against individual opponents
 
 import json
 import os
-from typing import Dict, List, Any
+from typing import Dict, Any
 from collections import defaultdict
-import numpy as np
 
 
 class OpponentProfitTracker:

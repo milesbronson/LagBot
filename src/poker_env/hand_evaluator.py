@@ -3,7 +3,7 @@ Hand evaluation using the treys library
 """
 
 from treys import Card, Evaluator, Deck
-from typing import List, Tuple
+from typing import List
 
 
 class HandEvaluator:
@@ -90,13 +90,6 @@ class HandEvaluator:
         deck = Deck()
         return deck.cards
     
-    @staticmethod
-    def print_hand(hole_cards: List[int], community_cards: List[int]):
-        """Print cards in readable format"""
-        print("Hole cards:", [Card.int_to_str(c) for c in hole_cards])
-        print("Community cards:", [Card.int_to_str(c) for c in community_cards])
-
-
 # Example usage and testing
 if __name__ == "__main__":
     evaluator = HandEvaluator()

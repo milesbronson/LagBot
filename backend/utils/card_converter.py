@@ -18,28 +18,3 @@ def convert_cards_for_frontend(card_ints: List[int]) -> List[str]:
     """
     return [HandEvaluator.card_to_string(c) for c in card_ints]
 
-
-def convert_card_for_frontend(card_int: int) -> str:
-    """
-    Convert single Treys card integer to string representation.
-
-    Args:
-        card_int: Card integer
-
-    Returns:
-        Card string (e.g., "Ah")
-    """
-    return HandEvaluator.card_to_string(card_int)
-
-
-def convert_card_from_frontend(card_str: str) -> int:
-    """
-    Convert card string to Treys integer representation.
-
-    Args:
-        card_str: Card string (e.g., "Ah")
-
-    Returns:
-        Card integer
-    """
-    return HandEvaluator.string_to_card(card_str)

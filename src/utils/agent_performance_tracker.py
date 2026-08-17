@@ -2,7 +2,7 @@
 Agent Performance Tracker - Tracks individual agent statistics during gameplay sessions
 """
 
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass
 from typing import Dict
 from datetime import datetime
 import json
@@ -139,19 +139,6 @@ class SessionTracker:
         if agent_id in self.agents:
             self.agents[agent_id].net_winnings = player_total_winnings
     
-    def record_fold(self, agent_id: int):
-        """Record a fold action"""
-        if agent_id in self.agents:
-            self.agents[agent_id].folds += 1
-    
-    def get_agent_stats(self, agent_id: int) -> AgentStats:
-        """Get stats for a specific agent"""
-        return self.agents.get(agent_id)
-    
-    def get_all_stats(self) -> Dict[int, AgentStats]:
-        """Get all agent stats"""
-        return self.agents.copy()
-    
     def print_session_summary(self):
         """Print summary of entire session"""
         print("\n" + "="*80)
@@ -217,36 +204,6 @@ class SessionTracker:
         
         print("\n" + "="*80)
     
-    def to_json(self, filename: str = None) -> str:
-        """
-        Export session to JSON
-        
-        Args:
-            filename: Output filename (default: session_name.json)
-            
-        Returns:
-            JSON string
-        """
-        if filename is None:
-            filename = f"session_stats_{self.session_name}.json"
-        
-        data = {
-            'session_name': self.session_name,
-            'total_hands': self.hand_count,
-            'agents': {
-                str(agent_id): agent.to_dict()
-                for agent_id, agent in self.agents.items()
-            }
-        }
-        
-        json_str = json.dumps(data, indent=2)
-        
-        with open(filename, 'w') as f:
-            f.write(json_str)
-        
-        return json_str
-
-
 if __name__ == "__main__":
     # Example usage
     tracker = SessionTracker("demo_session")

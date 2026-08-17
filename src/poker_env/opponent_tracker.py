@@ -911,16 +911,6 @@ class OpponentTracker:
                     break
         return relevant_hands
     
-    def export_stats(self, filepath: str):
-        """Export all opponent stats to JSON"""
-        stats = {
-            'timestamp': datetime.now().isoformat(),
-            'total_hands': self.hand_number,
-            'opponents': self.get_all_opponent_stats(),
-        }
-        with open(filepath, 'w') as f:
-            json.dump(stats, f, indent=2)
-    
     def get_exploitable_opponents(self, threshold_hands: int = 20) -> List[Dict]:
         """
         Get list of opponents with exploitable weaknesses.
@@ -982,32 +972,6 @@ class OpponentTracker:
         exploitable.sort(key=lambda x: x['exploitability_score'], reverse=True)
         return exploitable
     
-    def get_player_count_for_hand(self, hand_number: int) -> int:
-        """Get the number of players in a specific hand"""
-        for hand in self.hand_history:
-            if hand.hand_number == hand_number:
-                return hand.num_players
-        return 0
-    
-    def get_average_player_count(self) -> float:
-        """Get average number of players across all hands"""
-        if not self.hand_history:
-            return 0
-        return sum(h.num_players for h in self.hand_history) / len(self.hand_history)
-    
-    def get_hand_count_by_player_count(self) -> Dict[int, int]:
-        """Get count of hands grouped by number of players
-        
-        Returns: {num_players: count_of_hands}
-        Example: {6: 45, 4: 30, 5: 25} means 45 hands with 6 players, etc.
-        """
-        counts = {}
-        for hand in self.hand_history:
-            num = hand.num_players
-            counts[num] = counts.get(num, 0) + 1
-        return dict(sorted(counts.items()))
-
-
 class StackRatioTracker:
     """Tracks stack sizes relative to blinds"""
     

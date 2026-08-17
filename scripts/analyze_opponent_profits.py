@@ -4,7 +4,6 @@ Analyze per-opponent profit data from training runs
 """
 
 import argparse
-import sys
 from src.training.opponent_profit_tracker import load_opponent_profit_data
 import matplotlib.pyplot as plt
 import numpy as np

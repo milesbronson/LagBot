@@ -42,13 +42,6 @@ export interface OpponentStats {
   confidence: number;
 }
 
-export interface HandHistoryEntry {
-  hand_number: number;
-  actions: ActionHistoryEntry[];
-  winner: number;
-  pot: number;
-}
-
 export interface ActionHistoryEntry {
   player_id: number;
   player_name: string;

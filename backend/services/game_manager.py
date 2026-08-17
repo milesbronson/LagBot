@@ -70,10 +70,5 @@ class GameManager:
         if session_id in self.sessions:
             del self.sessions[session_id]
 
-    def get_active_sessions(self) -> int:
-        """Get count of active sessions."""
-        return len(self.sessions)
-
-
 # Global game manager instance
 game_manager = GameManager()

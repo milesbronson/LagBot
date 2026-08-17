@@ -1,0 +1,13 @@
+# Kept out of the SkyPilot workdir rsync — the repo ships to the pod
+# without multi-GB local state. The pod trains fresh lineages; parent
+# checkpoints, when needed, go through file_mounts in the task yaml.
+models/
+logs/
+metrics/
+.venv/
+frontend/node_modules/
+frontend/dist/
+claude_workflow/
+working_docs/
+.pytest_cache/
+__pycache__/

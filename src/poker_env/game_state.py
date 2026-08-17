@@ -5,7 +5,7 @@ Game state management for Texas Hold'em with hand history tracking
 from enum import Enum
 from typing import List, Optional, Dict, Any
 import random
-from treys import Card, Deck
+from treys import Deck
 
 from src.poker_env.player import Player
 from src.poker_env.pot_manager import PotManager
@@ -531,15 +531,3 @@ class GameState:
         if self.hand_history:
             self.hand_history.display()
     
-    def add_player(self, stack: int) -> int:
-        player_id = len(self.players)
-        new_player = Player(player_id=player_id, stack=stack)
-        new_player.record_buy_in(stack)
-        self.players.append(new_player)
-        return player_id
-    
-    def remove_player(self, player_id: int):
-        """Remove a player from the game"""
-        if 0 <= player_id < len(self.players):
-            self.players[player_id].is_sitting_out = True
-            self.players[player_id].is_active = False

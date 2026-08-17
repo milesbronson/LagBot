@@ -1,5 +1,4 @@
-from typing import Dict, List, Optional
-import asyncpg
+from typing import Dict, List
 from backend.db.database import get_pool
 
 

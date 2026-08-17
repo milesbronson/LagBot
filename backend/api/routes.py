@@ -5,7 +5,7 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException
 from backend.models.requests import NewGameRequest, ActionRequest
-from backend.models.responses import NewGameResponse, ErrorResponse
+from backend.models.responses import NewGameResponse
 from backend.services.game_manager import game_manager
 
 router = APIRouter()

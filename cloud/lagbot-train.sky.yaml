@@ -1,0 +1,65 @@
+# SkyPilot task: one LagBot training run on a rented RunPod instance.
+#
+# Launch via cloud/launch.sh — NEVER raw `sky launch` (the wrapper does
+# preflight, fetch-before-teardown, and cleanup-on-fail; see cloud/README.md).
+#
+# Parameterized with --env:
+#   CONFIG    configs/*.yaml to train with (default: real-equity lineage)
+#   RUN_NAME  run name -> models/<RUN_NAME>, metrics/<RUN_NAME>
+#   GH_ARTIFACT_TOKEN  (optional) fine-grained token for the artifact mailbox
+#   MAILBOX_REPO       (optional) owner/repo of the private artifact repo
+
+resources:
+  cloud: runpod
+  # LagBot's PPO is a small MLP and the env is Python/CPU-bound (especially
+  # with real_postflop_equity's Monte-Carlo rollouts) — the binding
+  # constraint is CPU + "cheapest tier that runs torch", not FLOPs.
+  # A40 is RunPod's cheapest reliably-available tier via SkyPilot.
+  accelerators: A40:1
+  any_of:
+    - region: CA-MTL-1
+    - region: US-GA-1
+    - region: EU-SE-1
+
+envs:
+  CONFIG: configs/heads_up_real_equity_v1.yaml
+  RUN_NAME: cloud_run
+  GH_ARTIFACT_TOKEN: ""
+  MAILBOX_REPO: ""
+
+setup: |
+  set -e
+  # ---- fast-fails first: cheap checks before any expensive install ----
+  [ "$(uname -m)" = "x86_64" ] || { echo "ARM node — abort"; exit 1; }
+  # Bandwidth probe BOTH CDNs we depend on (PyPI and the torch CDN are
+  # different hosts; a throttled region bills hours). Fail below ~1.5 MB/s.
+  probe() {
+    local url="$1"
+    local bps
+    bps=$(curl -sL -o /dev/null -r 0-2000000 -m 20 -w '%{speed_download}' "$url" || echo 0)
+    echo "probe ${url%%/files*}: ${bps%.*} B/s"
+    [ "${bps%.*}" -gt 1500000 ]
+  }
+  probe "https://files.pythonhosted.org/packages/source/n/numpy/numpy-1.26.4.tar.gz" || { echo "PyPI CDN too slow — abort"; exit 1; }
+  probe "https://download.pytorch.org/whl/cpu/torch-2.1.0%2Bcpu-cp311-cp311-linux_x86_64.whl" || { echo "torch CDN too slow — abort"; exit 1; }
+  # ---- install ----
+  pip install -q uv
+  uv sync --frozen
+  uv run --no-sync python -c 'import torch; print("torch", torch.__version__, "cuda:", torch.cuda.is_available())'
+  # Smoke the exact entry point (~1 min) so a crash-on-start costs cents:
+  uv run --no-sync python -c 'import yaml; yaml.safe_load(open("'"$CONFIG"'"))'
+
+run: |
+  set -e
+  echo "=== seeding anchors ==="
+  uv run --no-sync python scripts/seed_anchors.py
+  echo "=== training: $CONFIG -> $RUN_NAME (hard cap 6h) ==="
+  timeout 6h uv run --no-sync python train.py --config "$CONFIG" --name "$RUN_NAME" || echo "=== CAP HIT (timeout) ==="
+  # LAST ACT: self-push artifacts to the mailbox so results survive even
+  # if the local machine sleeps and every fetch fails.
+  if [ -n "$GH_ARTIFACT_TOKEN" ] && [ -n "$MAILBOX_REPO" ]; then
+    bash cloud/push_artifacts.sh "$RUN_NAME" || echo "=== MAILBOX PUSH FAILED ==="
+  else
+    echo "=== no mailbox configured (GH_ARTIFACT_TOKEN/MAILBOX_REPO unset) ==="
+  fi
+  echo "=== DONE ==="

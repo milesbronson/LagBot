@@ -48,12 +48,3 @@ export function parseCard(cardString: string): CardDisplay | null {
     symbol: suitInfo.symbol,
   };
 }
-
-export function getCardImage(cardString: string): string {
-  const card = parseCard(cardString);
-  if (!card) return '/cards/back.svg';
-
-  // For now, we'll use a text-based representation
-  // In a real app, you'd have SVG card images
-  return `/cards/${card.rank.toLowerCase()}_${card.suit}.svg`;
-}

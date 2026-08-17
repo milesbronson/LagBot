@@ -225,24 +225,3 @@ class DashboardData:
         
         return comparison
     
-    def export_csv(self, output_file: str = "training_summary.csv"):
-        """Export summary to CSV"""
-        runs = self.load_all_runs()
-        
-        with open(output_file, 'w') as f:
-            f.write("Run,Timesteps,Episodes,CurrentReward,AvgReward100,BestReward100,WinRate\n")
-            
-            for run_name, metrics in sorted(runs.items()):
-                if not metrics.get('timesteps'):
-                    continue
-                
-                ts = metrics['timesteps'][-1]
-                eps = metrics['episodes'][-1]
-                curr_reward = metrics['rewards'][-1] if metrics['rewards'] else 0
-                avg_100 = metrics['avg_reward_100'][-1] if metrics['avg_reward_100'] else 0
-                best_100 = max(metrics['avg_reward_100']) if metrics['avg_reward_100'] else 0
-                wr = metrics['win_rate'][-1] if metrics['win_rate'] else 0
-                
-                f.write(f"{run_name},{ts},{eps},{curr_reward:.2f},{avg_100:.2f},{best_100:.2f},{wr:.2f}\n")
-        
-        print(f"Exported to {output_file}")

@@ -2,7 +2,7 @@
 Utilities for serializing game state to JSON format.
 """
 from typing import Dict, List, Optional
-from src.poker_env.game_state import GameState, Player, BettingRound
+from src.poker_env.game_state import GameState, Player
 from backend.utils.card_converter import convert_cards_for_frontend
 
 

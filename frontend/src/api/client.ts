@@ -31,18 +31,8 @@ export async function startNewHand(sessionId: string): Promise<GameState> {
   return response.data;
 }
 
-export async function getGameState(sessionId: string): Promise<GameState> {
-  const response = await client.get(`/game/${sessionId}/state`);
-  return response.data;
-}
-
 export async function getOpponentStats(sessionId: string, playerId: number): Promise<any> {
   const response = await client.get(`/game/${sessionId}/opponent-stats/${playerId}`);
-  return response.data;
-}
-
-export async function getHandHistory(sessionId: string, limit: number = 20): Promise<any> {
-  const response = await client.get(`/game/${sessionId}/hand-history`, { params: { limit } });
   return response.data;
 }
 

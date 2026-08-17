@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Pod watchdog: every 15 min, kill runaway RunPod pods.
+     Install:
+       sed "s|__REPO__|$(pwd)|" cloud/com.lagbot.podwatchdog.plist \
+         > ~/Library/LaunchAgents/com.lagbot.podwatchdog.plist
+       launchctl load ~/Library/LaunchAgents/com.lagbot.podwatchdog.plist
+     Logs: /tmp/lagbot-podwatchdog.log -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.lagbot.podwatchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO__/cloud/watchdog.sh</string>
+  </array>
+  <key>StartInterval</key><integer>900</integer>
+  <key>StandardOutPath</key><string>/tmp/lagbot-podwatchdog.log</string>
+  <key>StandardErrorPath</key><string>/tmp/lagbot-podwatchdog.log</string>
+</dict>
+</plist>

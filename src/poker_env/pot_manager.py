@@ -113,26 +113,6 @@ class PotManager:
         """Get current raise bin percentages"""
         return self.raise_bins.copy()
         
-    def calculate_raise_amounts(self, player: 'Player', current_pot: int) -> List[int]:
-        """Calculate actual raise amounts based on pot percentages"""
-        raise_amounts = []
-        
-        for bin_percent in self.raise_bins:
-            raise_amount = int(current_pot * bin_percent)
-            raise_amount = self._round_to_big_blind(raise_amount)
-            
-            if raise_amount < self.min_raise:
-                raise_amount = self.min_raise
-            
-            if raise_amount <= player.stack:
-                raise_amounts.append(raise_amount)
-        
-        # Always include all-in as an option if player has chips and option enabled
-        if self.include_all_in and player.stack > 0:
-            raise_amounts.append(player.stack)
-        
-        return sorted(list(set(raise_amounts)))
-    
     def _round_to_big_blind(self, amount: int) -> int:
         """Round amount to nearest big blind"""
         if self.big_blind == 0:
@@ -221,17 +201,6 @@ class PotManager:
         self.min_raise = int(self.big_blind * self.min_raise_multiplier)
         self.last_raise_amount = 0
         
-    def get_valid_raise_range(self, player: Player) -> Tuple[int, int]:
-        """Get valid raise range for a player"""
-        to_call = self.current_bet - player.current_bet
-        min_raise_amount = self.min_raise
-        max_raise_amount = to_call + player.stack
-        
-        if max_raise_amount < to_call + min_raise_amount:
-            return 0, 0
-        
-        return min_raise_amount, max_raise_amount
-    
     def calculate_side_pots(self, players: List[Player]) -> List[Pot]:
         """Calculate main pot and side pots.
 

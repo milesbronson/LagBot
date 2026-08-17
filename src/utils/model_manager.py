@@ -1,5 +1,4 @@
 # src/utils/model_manager.py
-import os
 from pathlib import Path
 from datetime import datetime
 
@@ -31,32 +30,3 @@ class ModelManager:
         latest = max(models, key=lambda p: p.stat().st_mtime)
         return str(latest)
     
-    def get_model_by_name(self, name: str) -> str:
-        """
-        Get a model by run name
-        
-        Args:
-            name: Name of the training run (e.g., 'run_20231115_143022')
-            
-        Returns:
-            Path to the model
-        """
-        model_path = self.model_dir / name / "final_model.zip"
-        if not model_path.exists():
-            raise FileNotFoundError(f"Model not found: {model_path}")
-        return str(model_path)
-    
-    def list_all_models(self) -> list:
-        """
-        List all available trained models with timestamps
-        
-        Returns:
-            List of tuples (name, path, modification_time)
-        """
-        models = []
-        for model_file in sorted(self.model_dir.glob("*/final_model.zip")):
-            run_name = model_file.parent.name
-            mtime = datetime.fromtimestamp(model_file.stat().st_mtime)
-            models.append((run_name, str(model_file), mtime))
-        
-        return sorted(models, key=lambda x: x[2], reverse=True)

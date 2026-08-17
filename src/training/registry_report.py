@@ -23,7 +23,6 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from src.training.agent_card import AgentCard
 from src.training.agent_registry import AgentRegistry
 
 

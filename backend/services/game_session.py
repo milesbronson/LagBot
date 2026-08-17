@@ -4,9 +4,8 @@ GameSession wrapper for TexasHoldemEnv with bot agent management.
 import asyncio
 import logging
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from pathlib import Path
-import numpy as np
 
 logger = logging.getLogger(__name__)
 

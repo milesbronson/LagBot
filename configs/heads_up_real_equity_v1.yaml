@@ -1,0 +1,84 @@
+# Real-equity lineage v1 — the FIRST chain trained with genuine post-flop
+# hand strength in the observation.
+#
+# Every earlier checkpoint saw a constant 0.5 post-flop (the silent treys
+# bug fixed 2026-08-14, see docs/CHANGELOG.md), so their policies collapse
+# when fed real values. This lineage therefore starts FRESH: no
+# continuation, anchors seed the strata, and real_postflop_equity is on.
+#
+# NOTE: real equity means ~200 Monte-Carlo rollouts per post-flop
+# observation — expect a generation to take hours, not the ~15 min of the
+# legacy lineages. This is the config the cloud/ scaffolding exists for:
+#   cloud/launch.sh real_equity_gen0 configs/heads_up_real_equity_v1.yaml
+
+environment:
+  num_players: 2
+  starting_stack: 1000
+  small_blind: 5
+  big_blind: 10
+  min_raise_multiplier: 2.0
+  rake_enabled: false
+  rake_percent: 0.0
+  rake_cap: 0
+  reset_stacks_every_n_timesteps: 3000
+  raise_bins: [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0]
+  real_postflop_equity: true
+
+training:
+  total_timesteps: 2000000
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 128
+  n_epochs: 5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.05
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+reward:
+  mode: regret_blend
+  regret_lambda: 1.0
+
+opponents:
+  strategy: stratified_by_anchor
+  kind: null
+  fixed_ids: []
+  # Fresh lineage: anchors ARE the opponents until learned occupants
+  # exist in each stratum.
+  anchors_seed_only: false
+
+continuation:
+  resume_from: null
+  generations: 10
+
+eval_gate:
+  enabled: true
+  num_hands: 1000
+  threshold_mbb_per_100: -100.0
+  seed: 0
+
+stratified_eval_gate:
+  enabled: true
+  num_hands: 2000
+  per_stratum_threshold_mbb_per_100: -100.0
+  aggregate_threshold_mbb_per_100: -50.0
+  min_strata_to_pass: 6
+  cards_per_stratum: 1
+  seed: 0
+  include_anchors: true
+  max_retries: 2
+  retry_seed_offset: 1000
+
+regression_eval:
+  enabled: true
+  num_hands: 500
+  threshold_mbb_per_100: -100.0
+  seed: 0
+  include_fixtures: true
+
+logging:
+  log_dir: "./logs/"
+  save_frequency: 100000
+  model_dir: "./models/"
