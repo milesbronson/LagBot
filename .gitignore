@@ -149,8 +149,8 @@ $RECYCLE.BIN/
 *~
 
 # Project-specific
-logs/
-models/
+/logs/
+/models/
 *.zip
 *.tar.gz
 
