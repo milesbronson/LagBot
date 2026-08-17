@@ -275,7 +275,10 @@ class GameState:
             raise ValueError("Not enough players with chips to start a hand")
         
         self.deck = Deck().cards
-        random.shuffle(self.deck)
+        # rng defaults to the global random module; a seeded env.reset()
+        # swaps in a private random.Random so the deal is reproducible even
+        # if another thread consumes the global stream mid-shuffle.
+        getattr(self, "rng", random).shuffle(self.deck)
         self.community_cards = []
         
         self.pot_manager.start_new_hand()

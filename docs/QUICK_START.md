@@ -6,10 +6,9 @@
 
 ```bash
 # From LagBot directory
-./check_setup.sh           # Verify requirements
-pip install -r backend/requirements.txt
+uv sync --group backend
 cd frontend && npm install && cd ..
-./start_web.sh             # Start both servers
+docker compose up          # Start db + backend + frontend
 ```
 
 Open http://localhost:5173
@@ -75,7 +74,7 @@ lsof -ti:5173 | xargs kill -9  # Kill process on port 5173
 **Module not found:**
 ```bash
 # Backend
-pip install -r backend/requirements.txt
+uv sync --group backend
 
 # Frontend
 cd frontend && npm install
@@ -188,4 +187,4 @@ If all steps pass, system is working correctly!
 
 ---
 
-**Ready to Play? Run: `./start_web.sh`**
+**Ready to Play? Run: `docker compose up`**

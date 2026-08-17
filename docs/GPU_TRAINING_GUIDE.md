@@ -25,7 +25,7 @@ pip install -r requirements.txt
 ### 2. Verify GPU Setup
 
 ```bash
-python3 check_gpu.py
+python scripts/check_gpu.py
 ```
 
 Expected output:
@@ -158,7 +158,7 @@ training:
 
 1. Verify GPU detection:
    ```bash
-   python3 check_gpu.py
+   python scripts/check_gpu.py
    ```
 
 2. Check if another process is using GPU:
@@ -205,7 +205,7 @@ These bugs would have made accurate poker play impossible to learn. With fixes +
 ## Next Steps
 
 1. **Install dependencies**: `pip3 install -r requirements.txt`
-2. **Check GPU**: `python3 check_gpu.py`
+2. **Check GPU**: `python scripts/check_gpu.py`
 3. **Start training**: `python3 train.py --name fixed_gpu_v1`
 4. **Monitor progress**: `tensorboard --logdir ./logs/`
 
@@ -237,7 +237,7 @@ agent = PPOAgent(
 ## Questions?
 
 - Check logs: `tail -f logs/*/events.out.tfevents.*`
-- GPU status: `python3 check_gpu.py`
+- GPU status: `python scripts/check_gpu.py`
 - Training progress: `tensorboard --logdir ./logs/`
 
 Good luck with training! 🚀🎰

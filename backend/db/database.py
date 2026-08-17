@@ -1,9 +1,11 @@
+import asyncio
 import os
 from typing import Optional
 import asyncpg
 from pathlib import Path
 
 _pool: Optional[asyncpg.Pool] = None
+_pool_lock = asyncio.Lock()
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -14,8 +16,14 @@ DATABASE_URL = os.environ.get(
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
-        await _init_schema(_pool)
+        # Lock prevents two concurrent first-requests from both creating a
+        # pool and orphaning one (leaked connections that close_pool never
+        # sees).
+        async with _pool_lock:
+            if _pool is None:
+                pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+                await _init_schema(pool)
+                _pool = pool
     return _pool
 
 

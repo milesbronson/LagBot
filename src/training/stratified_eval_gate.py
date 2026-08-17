@@ -275,8 +275,15 @@ class StratifiedEvalGate:
     def passes(self, result: StratifiedEvalResult) -> bool:
         # Aggregate score keeps a true catastrophe from sneaking through
         # by clearing the per-stratum minimum on a technicality.
+        #
+        # Clamp the required-strata bar to what was actually evaluable:
+        # with a thin pool (early generations, aggressive excludes) fewer
+        # strata exist than the configured minimum, and an unclamped bar
+        # made every candidate unpassable — burning max_retries full
+        # trainings and stalling the chain permanently.
+        required = min(self.min_strata_to_pass, result.strata_evaluated)
         return (
-            result.strata_passed >= self.min_strata_to_pass
+            result.strata_passed >= required
             and result.aggregate_mbb_per_100 >= self.aggregate_threshold
         )
 

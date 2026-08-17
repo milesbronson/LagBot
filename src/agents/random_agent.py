@@ -13,31 +13,34 @@ class RandomAgent(BaseAgent):
     Useful as a baseline for testing
     """
     
-    def __init__(self, name: str = "RandomAgent"):
+    def __init__(self, name: str = "RandomAgent", rng: random.Random = None):
         """
         Initialize random agent
-        
+
         Args:
             name: Agent name
+            rng: Optional private random.Random for reproducible play that
+                 is immune to other consumers of the global RNG.
         """
         super().__init__(name)
-    
+        self.rng = rng or random
+
     def select_action(self, observation: np.ndarray, valid_actions: list = None) -> int:
         """
         Select a random action
-        
+
         Args:
             observation: Current game observation (unused)
             valid_actions: List of valid action indices (if None, assumes all actions valid)
-            
+
         Returns:
             Random action index
         """
         if valid_actions is None:
             # Default actions: 0=fold, 1=check/call, 2=raise
             valid_actions = [0, 1, 2]
-        
-        return random.choice(valid_actions)
+
+        return self.rng.choice(valid_actions)
 
 
 class WeightedRandomAgent(BaseAgent):

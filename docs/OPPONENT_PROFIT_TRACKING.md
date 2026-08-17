@@ -47,16 +47,16 @@ RandomAgent          random          1234     +0.8765       +0.0007       72.3%
 
 **Text summary:**
 ```bash
-python3 analyze_opponent_profits.py my_run
+python scripts/analyze_opponent_profits.py my_run
 ```
 
 **Graphical analysis:**
 ```bash
 # Show plots
-python3 analyze_opponent_profits.py my_run --plot
+python scripts/analyze_opponent_profits.py my_run --plot
 
 # Save plots to file
-python3 analyze_opponent_profits.py my_run --plot --save opponent_analysis.png
+python scripts/analyze_opponent_profits.py my_run --plot --save opponent_analysis.png
 ```
 
 ## What the Graphs Show
@@ -105,20 +105,20 @@ ppo_gen_1    → -0.32 profit (Struggling)
 
 ### 1. Find Weakest Opponent
 ```bash
-python3 analyze_opponent_profits.py my_run
+python scripts/analyze_opponent_profits.py my_run
 ```
 Look for the opponent with highest profit - that's who the bot exploits best!
 
 ### 2. Track Improvement Over Time
 ```bash
-python3 analyze_opponent_profits.py my_run --plot
+python scripts/analyze_opponent_profits.py my_run --plot
 ```
 Compare early vs late training slopes to see if bot learns to exploit better.
 
 ### 3. Compare Generations
 ```bash
-python3 analyze_opponent_profits.py gen_1
-python3 analyze_opponent_profits.py gen_2
+python scripts/analyze_opponent_profits.py gen_1
+python scripts/analyze_opponent_profits.py gen_2
 ```
 See if newer generation exploits opponents better than previous.
 

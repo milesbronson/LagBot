@@ -125,7 +125,11 @@ class OpponentSampler:
         excluded = set(exclude_ids)
         cards = [
             c for c in self.registry.all()
-            if c.id not in excluded and (kind is None or c.kind == kind)
+            if c.id not in excluded
+            and (kind is None or c.kind == kind)
+            # A PPO card without a checkpoint path can't be instantiated;
+            # letting one through aborts the whole training run downstream.
+            and (c.kind != "ppo" or c.path)
         ]
         return cards
 

@@ -157,20 +157,40 @@ class OpponentAutoPlayWrapper(gym.Env):
             self.opponent_types_by_id[pid] = kind
 
     def reset(self, **kwargs):
-        if self.opponent_factory is not None:
-            self._rotate_in_new_opponents()
+        # The hand can END during reset (every opponent folds or is all-in
+        # before the learner's first turn — every other hand in heads-up,
+        # whenever the button makes the opponent act first). Returning that
+        # terminal state used to hand SB3 a phantom 1-step episode: its next
+        # step() hit the env's hand-complete no-op guard and trained on
+        # reward 0 credited to an arbitrary action, discarding the
+        # learner's blind-steal profit. Deal again until the learner has a
+        # live decision. (The steal profit itself is unrepresentable in the
+        # Gym reset API; dropping the poisoned episodes is the fix.)
+        for _attempt in range(50):
+            if self.opponent_factory is not None:
+                self._rotate_in_new_opponents()
 
-        obs, info = self.env.reset(**kwargs)
+            obs, info = self.env.reset(**kwargs)
 
-        if self.profit_tracker and self.opponent_factory is None:
-            learning_player = self.env.game_state.players[self.learner_id]
-            self.hand_starting_stack = learning_player.starting_stack_this_hand
+            if self.profit_tracker and self.opponent_factory is None:
+                learning_player = self.env.game_state.players[self.learner_id]
+                self.hand_starting_stack = learning_player.starting_stack_this_hand
 
-        # Without this the first step() would apply the learner's action
-        # to an opponent seat when the button rotates.
-        obs, _, terminated, truncated, info = self._auto_play_opponents(
-            obs, terminated=False, truncated=False, info=info
-        )
+            # Without this the first step() would apply the learner's action
+            # to an opponent seat when the button rotates.
+            obs, _, terminated, truncated, info = self._auto_play_opponents(
+                obs, terminated=False, truncated=False, info=info
+            )
+            if not (terminated or truncated):
+                return obs, info
+
+            # Completed during reset: still account the opponents' result,
+            # then deal a fresh hand. Drop any caller seed so the redeal
+            # doesn't replay the identical deck forever.
+            self._record_opponent_profits(
+                self.env.game_state.players[self.learner_id]
+            )
+            kwargs.pop("seed", None)
         return obs, info
 
     def step(self, action: int) -> Tuple:

@@ -193,7 +193,7 @@ The `OpponentTracker` maintains a full HUD profile per player, classifies oppone
 - **Stratified opponent sampling** from a persistent JSON agent registry that records every checkpoint's lineage, training steps, and observed stats
 - **Regret-shaped rewards** (`regret_blend` mode) layered on the base big-blinds-won-per-hand signal
 - **Eval gate**: a new checkpoint must beat its parent head-to-head (same code path as `duel.py`) before it graduates into the opponent pool
-- TensorBoard logging plus JSON metrics and dashboard generation (`scripts/dashboard_gen.py`)
+- TensorBoard logging plus JSON metrics, and an interactive multi-page Streamlit dashboard: `uv run streamlit run scripts/dashboard.py` (registry overview, play styles, policy compare, training curves, critic calibration)
 
 ![Training dashboard — learning curve, action distribution, loss, and run summary](docs/images/dashboard_deep_arch_3M_clean.png)
 

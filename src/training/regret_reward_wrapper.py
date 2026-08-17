@@ -102,15 +102,14 @@ class RegretRewardWrapper(gym.Env):
         player = base.game_state.players[self._learner_id]
         return float(player.total_bet_this_hand)
 
-    def _learner_starting_stack(self) -> float:
-        base = self._base_env()
-        player = base.game_state.players[self._learner_id]
-        return float(player.starting_stack_this_hand)
-
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self._invested_at_decision = []
-        self._starting_stack = self._learner_starting_stack()
+        # Normalize fold-value by the CONFIG starting stack, matching the
+        # env's own profit term (texas_holdem_env divides by the config
+        # value). Using the per-hand stack put the two regret_blend terms
+        # on different scales whenever stacks drifted from the default.
+        self._starting_stack = float(self._base_env().starting_stack)
         return obs, info
 
     def step(self, action: int) -> Tuple:

@@ -40,7 +40,10 @@ def _play(anchor: AnchorAgent, hands: int = 300, seed: int = 11):
         learning_agent_id=0,
         raise_bins=[0.5, 1.0, 2.0],
     )
-    opponent = RandomAgent()
+    # Private RNG: the band assertions must not wobble when another
+    # test's background thread (e.g. streamlit AppTest) consumes the
+    # global random stream mid-suite.
+    opponent = RandomAgent(rng=random.Random(seed))
     anchor.seat(env.game_state.players[0])
     anchor.bind_env(env)
     opponent.seat(env.game_state.players[1])
@@ -113,7 +116,7 @@ class TestAnchorContract:
             )
             anchor.seat(env.game_state.players[0])
             anchor.bind_env(env)
-            opponent = RandomAgent()
+            opponent = RandomAgent(rng=random.Random(7))
             opponent.seat(env.game_state.players[1])
             opponent.bind_env(env)
 

@@ -125,6 +125,7 @@ def _build_opponent_factory(
             kind=opponents_cfg.get("kind"),
             ids=opponents_cfg.get("fixed_ids"),
             anchors_seed_only=opponents_cfg.get("anchors_seed_only", False),
+            with_replacement=opponents_cfg.get("with_replacement", False),
         )
         if not cards:
             # Empty registry pool — fall back to the call fixture so the
@@ -153,6 +154,7 @@ def select_opponent_cards(
         exclude_ids=exclude,
         ids=opponents_cfg.get("fixed_ids"),
         anchors_seed_only=opponents_cfg.get("anchors_seed_only", False),
+        with_replacement=opponents_cfg.get("with_replacement", False),
     )
     # Pad with rule fixtures if the registry pool was too small.
     while len(cards) < num_needed:
@@ -537,7 +539,12 @@ def train_one_generation(
     # retry can register a fresh one under the same id.
     strat_cfg = config.get("stratified_eval_gate", {})
     if strat_cfg.get("enabled"):
-        training_pool_ids = [c.id for c in opponent_cards]
+        # Exclude the candidate itself, not just its training pool: the
+        # card is already registered at this point with zero observed
+        # hands, so it lands in the "unstratified" bucket and the gate can
+        # draw it as its own opponent — a mirrored self-match scores ~0
+        # and "passes" any negative threshold.
+        training_pool_ids = [c.id for c in opponent_cards] + [card.id]
         passed_strat, strat_result = _run_stratified_gate(
             env_cfg, strat_cfg, card, training_pool_ids, registry,
         )
@@ -629,6 +636,10 @@ def train(config_path: str, run_name: Optional[str] = None) -> None:
     strat_cfg = config.get("stratified_eval_gate", {})
     max_retries = int(strat_cfg.get("max_retries", 0))
     retry_seed_offset = int(strat_cfg.get("retry_seed_offset", 1000))
+    # Snapshot the base seed once: strat_cfg is the same dict the retry
+    # loop mutates, so reading it inside the loop compounded the offsets
+    # (0, +1000, +3000 instead of 0, +1000, +2000).
+    base_gate_seed = int(strat_cfg.get("seed", 0))
 
     base_name = run_name or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     for gen in range(generations):
@@ -642,7 +653,7 @@ def train(config_path: str, run_name: Optional[str] = None) -> None:
                 # across attempts is intentionally relaxed — we want a
                 # genuinely fresh draw from PPO's RNG too.
                 config.setdefault("stratified_eval_gate", {})["seed"] = (
-                    int(strat_cfg.get("seed", 0)) + attempt * retry_seed_offset
+                    base_gate_seed + attempt * retry_seed_offset
                 )
                 print(
                     f"\n>>> Retrying {gen_name} (attempt {attempt + 1}/"

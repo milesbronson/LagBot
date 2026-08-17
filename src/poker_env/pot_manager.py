@@ -273,22 +273,34 @@ class PotManager:
         pots = self.calculate_side_pots(players)
         winnings: Dict[int, int] = {p.player_id: 0 for p in players}
         
+        rake_taken_this_hand = 0
         for pot in pots:
             eligible_ranks = {
-                pid: hand_ranks.get(pid, 9999) 
-                for pid in pot.eligible_players 
+                pid: hand_ranks.get(pid, 9999)
+                for pid in pot.eligible_players
                 if pid in hand_ranks
             }
-            
+
             if not eligible_ranks:
-                continue
-            
+                # Every contributor at this layer folded (hand_ranks only
+                # holds live players). Folded chips stay in the pot and go
+                # to the remaining winner(s) — skipping the layer silently
+                # destroyed the chips.
+                eligible_ranks = dict(hand_ranks)
+                if not eligible_ranks:
+                    continue
+
             best_rank = min(eligible_ranks.values())
             winners = [pid for pid, rank in eligible_ranks.items() if rank == best_rank]
-            
+
             pot_after_rake = pot.amount
             if self.rake_percent > 0 and len(eligible_ranks) > 1:
-                rake = min(int(pot.amount * self.rake_percent), self.rake_cap)
+                # rake_cap is per HAND: without the accumulator a multiway
+                # all-in with 3 side pots raked up to 3x the cap.
+                rake = min(int(pot.amount * self.rake_percent),
+                           self.rake_cap - rake_taken_this_hand)
+                rake = max(rake, 0)
+                rake_taken_this_hand += rake
                 pot_after_rake -= rake
             
             amount_per_winner = pot_after_rake // len(winners)

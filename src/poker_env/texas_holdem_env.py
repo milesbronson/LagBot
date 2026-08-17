@@ -2,6 +2,8 @@
 OpenAI Gym environment with pot-based raise actions + all-in + opponent tracking
 """
 
+import random
+
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -134,13 +136,25 @@ class TexasHoldemEnv(gym.Env):
     def reset(self, seed: int = None, options: dict = None) -> Tuple[np.ndarray, dict]:
         """Reset for new hand"""
         if seed is not None:
+            # A seeded reset must actually pin the deal: np.random alone
+            # left the shuffle (global random) unseeded and quietly broke
+            # the Gymnasium seeding contract for every caller. The deck
+            # gets a PRIVATE rng so no other thread/consumer of the global
+            # stream can perturb a seeded deal.
+            super().reset(seed=seed)
+            self.game_state.rng = random.Random(seed)
+            random.seed(seed)
             np.random.seed(seed)
 
         # Check if stack reset is due (BETWEEN hands, never mid-hand)
         if self.reset_stacks_every_n_timesteps is not None:
             if self.timesteps_since_reset >= self.reset_stacks_every_n_timesteps:
                 for player in self.game_state.players:
-                    player.stack = self.starting_stack
+                    # record_buy_in keeps total_buy_in consistent with the
+                    # chips actually injected/removed (a bare stack
+                    # assignment made bankroll accounting drift every
+                    # reset window).
+                    player.record_buy_in(self.starting_stack - player.stack)
                 self.timesteps_since_reset = 0
                 print(f"[RESET] Timestep {self.total_timesteps}")
 
@@ -207,19 +221,21 @@ class TexasHoldemEnv(gym.Env):
             )
 
         current_player = self.game_state.get_current_player()
-        starting_stack = current_player.starting_stack_this_hand
 
-        # Store pre-action state for tracking
-        stack_before = current_player.stack + current_player.total_bet_this_hand
+        # Store pre-action state for tracking. The amount must be computed
+        # BEFORE execute_action mutates bets/stacks: computed after, every
+        # call read to_call == 0 and every shove read stack == 0, filling
+        # the tracker's bet-sizing history with zeros.
+        stack_before = current_player.stack
         pot_before = self.game_state.pot_manager.get_pot_total()
         street_before = self._betting_round_to_street(self.game_state.betting_round)
         position = self.game_state.current_player_idx
+        action_amount = self._calculate_action_amount(current_player, action_int, raise_amount)
 
         action_type_str = self.game_state.execute_action(action_int, raise_amount)
 
         # Record action with opponent tracker
         action_enum = self._string_to_action_enum(action_type_str)
-        action_amount = self._calculate_action_amount(current_player, action_int, raise_amount)
 
         self.opponent_tracker.record_action(
             player_id=current_player.player_id,
@@ -640,13 +656,13 @@ class TexasHoldemEnv(gym.Env):
 
         Treys card encoding:
         - Rank: bits 8-11 (0-12 for 2-A)
-        - Suit: bits 12-15 (0x8=spade, 0x4=heart, 0x2=diamond, 0x1=club)
+        - Suit: bits 12-15 (0x1=spade, 0x2=heart, 0x4=diamond, 0x8=club)
 
         Suit encoding (one-hot):
-        - spade (0x8): [1,0,0,0]
-        - heart (0x4): [0,1,0,0]
-        - diamond (0x2): [0,0,1,0]
-        - club (0x1): [0,0,0,1]
+        - spade (0x1): [1,0,0,0]
+        - heart (0x2): [0,1,0,0]
+        - diamond (0x4): [0,0,1,0]
+        - club (0x8): [0,0,0,1]
         """
         enc = []
         for c in cards:

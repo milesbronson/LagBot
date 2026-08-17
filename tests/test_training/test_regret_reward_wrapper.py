@@ -32,6 +32,7 @@ class _FakeBaseEnv:
 
     def __init__(self):
         self.learning_agent_id = 0
+        self.starting_stack = 1000
         self.game_state = _FakeGameState()
         self.observation_space = gym.spaces.Box(low=0, high=1, shape=(4,))
         self.action_space = gym.spaces.Discrete(3)

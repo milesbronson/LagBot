@@ -58,7 +58,7 @@ python train.py --config configs/default_config.yaml --name gen_3
 
 ### 2. `train_diverse_opponents.py` - Diverse Opponent Training
 
-**What it does:** Trains against random rule-based opponents (TightAgent, AggressiveAgent, PassiveAgent, ManiacAgent)
+**What it does:** Trains against rule-based opponents (now the 10 anchor archetypes in `src/agents/anchors.py`)
 
 **How it works:**
 - Randomly selects 2 opponents from a pool of 4 diverse agents

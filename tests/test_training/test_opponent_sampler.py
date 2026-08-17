@@ -13,7 +13,10 @@ def _make_registry(tmp_path, specs):
     """specs: iterable of (id, kind, generation)."""
     r = AgentRegistry(path=str(tmp_path / "registry.json"))
     for aid, kind, gen in specs:
-        r.register(AgentCard(id=aid, name=aid, kind=kind, generation=gen))
+        # PPO cards need a checkpoint path: the sampler filters out
+        # path-less PPO cards (they cannot be instantiated).
+        r.register(AgentCard(id=aid, name=aid, kind=kind, generation=gen,
+                             path="dummy.zip" if kind == "ppo" else None))
     return r
 
 
@@ -161,6 +164,7 @@ class TestStratifiedByAnchor:
         # PPO card with shover-ish stats — should fall in the shover stratum.
         shover_like = AgentCard(
             id="ppo_shover_like", name="shover_like", kind="ppo", generation=1,
+            path="dummy.zip",
             behavior_stats={
                 "hands_observed": 500,
                 "vpip": 0.98, "pfr": 0.94, "af": 40.0,
@@ -181,7 +185,7 @@ class TestStratifiedByAnchor:
         r = AgentRegistry(path=str(tmp_path / "registry.json"))
         self._seed_anchors(r)
         r.register(AgentCard(
-            id="fresh", name="fresh", kind="ppo", generation=1,
+            id="fresh", name="fresh", kind="ppo", generation=1, path="dummy.zip",
             behavior_stats={"hands_observed": 0},
         ))
         s = _sampler(r)
@@ -226,6 +230,7 @@ class TestStratifiedByAnchor:
     def _add_shover_like_ppo(self, r):
         r.register(AgentCard(
             id="ppo_shover_like", name="shover_like", kind="ppo", generation=1,
+            path="dummy.zip",
             behavior_stats={
                 "hands_observed": 500,
                 "vpip": 0.98, "pfr": 0.94, "af": 40.0,
