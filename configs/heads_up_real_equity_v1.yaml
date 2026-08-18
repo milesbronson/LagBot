@@ -4,7 +4,7 @@
 # Every earlier checkpoint saw a constant 0.5 post-flop (the silent treys
 # bug fixed 2026-08-14, see docs/CHANGELOG.md), so their policies collapse
 # when fed real values. This lineage therefore starts FRESH: no
-# continuation, anchors seed the strata, and real_postflop_equity is on.
+# continuation, anchors seed the strata, and equity is real on every street.
 #
 # NOTE: real equity means ~200 Monte-Carlo rollouts per post-flop
 # observation — expect a generation to take hours, not the ~15 min of the
@@ -22,7 +22,6 @@ environment:
   rake_cap: 0
   reset_stacks_every_n_timesteps: 3000
   raise_bins: [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0]
-  real_postflop_equity: true
 
 training:
   total_timesteps: 2000000

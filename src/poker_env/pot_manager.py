@@ -167,10 +167,18 @@ class PotManager:
             # Don't update current_bet (they couldn't match it)
             return actual_bet, "all-in"
 
-        # Fold if amount is less than required call (and not going all-in)
+        # An under-sized amount is a CALL, never a silent fold: the caller
+        # asked to continue in the hand, and no card room folds a player
+        # for a malformed raise size.
         if amount < to_call:
-            player.fold()
-            return 0, "fold"
+            amount = to_call
+
+        # Enforce the minimum raise: a raise smaller than min_raise (and
+        # not an all-in) is downgraded to a call. Without this, 1-chip
+        # re-raises reopened the betting endlessly.
+        intended_raise = amount - to_call
+        if 0 < intended_raise < self.min_raise and amount < player.stack:
+            amount = to_call
 
         # Place the bet
         #print(f"Bet amount: {amount}")
@@ -184,7 +192,10 @@ class PotManager:
             raise_amount = actual_bet - to_call
             self.current_bet = player.current_bet  # ← UPDATE for raises only
             self.last_raise_amount = raise_amount
-            self.min_raise = int(raise_amount * self.min_raise_multiplier)
+            # Only a FULL raise re-sets the min-raise ladder; a short
+            # all-in must not ratchet min_raise down for everyone else.
+            if raise_amount >= self.min_raise:
+                self.min_raise = int(raise_amount * self.min_raise_multiplier)
             action = "all-in" if player.is_all_in else "raise"
         else:
             # This is a call (actual_bet == to_call) - don't update current_bet

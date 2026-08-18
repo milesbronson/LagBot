@@ -25,11 +25,15 @@ async def save_hand(
                 INSERT INTO hands (session_id, hand_number, num_players, small_blind,
                                    big_blind, community_cards, pot, winner_ids, winner_amounts)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (session_id, hand_number) DO NOTHING
                 RETURNING id
                 """,
                 session_id, hand_number, num_players, small_blind, big_blind,
                 community_cards, pot, winner_ids, winner_amounts,
             )
+            if hand_id is None:
+                # Retried save of an already-persisted hand — idempotent no-op.
+                return
 
             for p in players:
                 await conn.execute(

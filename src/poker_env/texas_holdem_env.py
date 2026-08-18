@@ -48,19 +48,17 @@ class TexasHoldemEnv(gym.Env):
         reset_stacks_every_n_timesteps: Optional[int] = None,
         track_opponents: bool = True,
         learning_agent_id: int = 0,
-        real_postflop_equity: bool = False,
     ):
         """
         Args:
             raise_bins: List of pot percentages (e.g., [0.5, 1.0, 2.0])
             include_all_in: If True, add all-in as last action
             track_opponents: If True, include opponent stats in observation (68 dims vs 32)
-            real_postflop_equity: If True, the hand_strength obs feature uses
-                Monte-Carlo equity on flop/turn/river. Defaults to False
-                because every checkpoint trained before 2026-08 saw a
-                constant 0.5 post-flop (a silent treys API bug) and their
-                policies collapse when fed real values — flip this on only
-                for a fresh training lineage (config key of the same name).
+
+        Note: hand_strength in the observation is real Monte-Carlo equity on
+        every street. Checkpoints trained before rules-v2 (2026-08) saw a
+        constant 0.5 post-flop and misplay in this env — they are kept only
+        as historical artifacts.
         """
         super().__init__()
         
@@ -112,7 +110,6 @@ class TexasHoldemEnv(gym.Env):
                 f"learning_agent_id={learning_agent_id} must be in [0, {num_players})"
             )
         self.learning_agent_id = learning_agent_id
-        self.real_postflop_equity = real_postflop_equity
         self.opponent_tracker = OpponentTracker(max_history_hands=1000)
         self.player_positions = {}
 
@@ -487,7 +484,11 @@ class TexasHoldemEnv(gym.Env):
         call = (self.game_state.pot_manager.current_bet - player.current_bet) / self.starting_stack
 
         active = len(self.game_state.get_active_players()) / self.num_players
-        pos = self.game_state.current_player_idx / self.num_players
+        # Button-RELATIVE position (0 = on the button). The raw seat index
+        # was a constant 0 for the learner in every hand — the policy had
+        # no usable "am I in position?" signal at all.
+        pos = ((self.game_state.current_player_idx - self.game_state.button_position)
+               % self.num_players) / self.num_players
         rnd = self.game_state.betting_round.value / 4
         btn = self.game_state.button_position / self.num_players
 
@@ -532,13 +533,6 @@ class TexasHoldemEnv(gym.Env):
         if not hole_cards or len(hole_cards) < 2:
             return 0.5
 
-        # Legacy compatibility: checkpoints trained before 2026-08 only ever
-        # saw 0.5 here post-flop (silent treys bug) and their policies are
-        # calibrated to it — a regression duel showed the champion dropping
-        # from +3,384 to -1,822 BB/100 vs a call bot when fed real equity.
-        if not self.real_postflop_equity and any(c != 0 for c in community_cards):
-            return 0.5
-
         # Cache must be keyed on the player's own hole cards, not just the
         # board: both seats compute equity on the same street, and a
         # board-only key hands seat 1 the equity of seat 0's hand.
@@ -565,37 +559,32 @@ class TexasHoldemEnv(gym.Env):
                 self._hand_strength_cache[cache_key] = equity
                 return equity
 
-            # Monte Carlo simulation for flop/turn/river
+            # Monte Carlo simulation for flop/turn/river. Uses a PRIVATE
+            # rng seeded from the cards themselves: the estimate is then a
+            # pure function of (hole, board) — reproducible, immune to
+            # other threads, and it consumes nothing from the global RNG
+            # stream the deck shuffle depends on. (The old per-sim Deck()
+            # shuffled 52 cards through global random 200x per
+            # observation.)
             wins = 0
             ties = 0
             n_simulations = 200
+            rng = random.Random(hash(cache_key) & 0xFFFFFFFF)
+
+            known = set(hero_hand + board)
+            # GetFullDeck is the static 52-card list — constructing Deck()
+            # here would itself shuffle through global random.
+            remaining = [c for c in Deck.GetFullDeck() if c not in known]
+            need = 5 - len(board)
 
             for _ in range(n_simulations):
-                # Create deck without hero's cards and board
-                deck = Deck()
-                used_cards = set(hero_hand + board)
-
-                # Draw random opponent hand (treys draw(1) returns a list)
-                opp_hand = []
-                for _ in range(2):
-                    card = deck.draw(1)[0]
-                    while card in used_cards:
-                        card = deck.draw(1)[0]
-                    opp_hand.append(card)
-                    used_cards.add(card)
-
-                # Complete the board if needed
-                sim_board = board[:]
-                while len(sim_board) < 5:
-                    card = deck.draw(1)[0]
-                    while card in used_cards:
-                        card = deck.draw(1)[0]
-                    sim_board.append(card)
-                    used_cards.add(card)
+                draw = rng.sample(remaining, 2 + need)
+                opp_hand = draw[:2]
+                sim_board = board + draw[2:]
 
                 # Both hands must be scored on the SAME completed board;
-                # comparing hero-on-flop vs opponent-on-river ranks are
-                # incomparable treys scores.
+                # hero-on-flop vs opponent-on-river treys ranks are
+                # incomparable.
                 hero_score = self.treys_evaluator.evaluate(sim_board, hero_hand)
                 opp_score = self.treys_evaluator.evaluate(sim_board, opp_hand)
 

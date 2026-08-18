@@ -64,6 +64,7 @@ class RegressionEval:
         seed: int = 0,
         include_fixtures: bool = True,
         raise_bins: list[float] | None = None,
+        env_overrides: dict | None = None,
     ):
         if num_hands <= 0:
             raise ValueError("num_hands must be > 0")
@@ -75,6 +76,7 @@ class RegressionEval:
         self.seed = seed
         self.include_fixtures = include_fixtures
         self.raise_bins = raise_bins
+        self.env_overrides = env_overrides or {}
 
     def _instantiate(self, card: AgentCard) -> BaseAgent:
         if card.kind == "ppo":
@@ -120,6 +122,7 @@ class RegressionEval:
             big_blind=self.big_blind,
             seed=self.seed,
             raise_bins=self.raise_bins,
+            env_overrides=self.env_overrides,
         )
 
         result = RegressionResult(

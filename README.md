@@ -46,7 +46,10 @@ python scripts/duel.py models/heads_up_chain_8bin_v6_gen29 call --num-hands 2000
 
 (Checkpoints aren't committed — they're large and regenerable from
 `configs/`; the duel command assumes a `models/` directory from your own
-training runs.)
+training runs. These numbers were measured under the pre-rules-v2 engine
+— see `docs/CHANGELOG.md` 2026-08-17 — and the listed models are
+historical artifacts of that world; the first correct-rules lineage is
+`configs/heads_up_real_equity_v1.yaml`.)
 
 ### By the numbers
 

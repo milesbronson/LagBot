@@ -46,16 +46,18 @@ class TestAllInActionFlow:
         print("="*80)
         
         self.game.start_new_hand()
-        
+
+        # Real HU rules: the button posts the SB and acts first preflop.
+        sb_idx = self.game.button_position
+        bb_idx = 1 - sb_idx
+
         print("\n--- INITIAL STATE ---")
         print(f"Blinds posted:")
-        print(f"  Player 0 (SB): stack={self.game.players[0].stack}, bet={self.game.players[0].current_bet}")
-        print(f"  Player 1 (BB): stack={self.game.players[1].stack}, bet={self.game.players[1].current_bet}")
+        print(f"  Player {sb_idx} (SB/BTN): stack={self.game.players[sb_idx].stack}, bet={self.game.players[sb_idx].current_bet}")
+        print(f"  Player {bb_idx} (BB): stack={self.game.players[bb_idx].stack}, bet={self.game.players[bb_idx].current_bet}")
         print(f"Current player index: {self.game.current_player_idx}")
-        print(f"Current player: Player {self.game.get_current_player().player_id}")
-        
-        # Player 0 (SB) should act first preflop
-        assert self.game.current_player_idx == 0, "Player 0 should act first preflop"
+
+        assert self.game.current_player_idx == sb_idx, "Button/SB should act first preflop"
         p0 = self.game.get_current_player()
         print(f"\nPlayer 0's turn (small blind)")
         print(f"  Stack: ${p0.stack}, needs to call: ${self.game.pot_manager.current_bet - p0.current_bet}")
@@ -91,8 +93,8 @@ class TestAllInActionFlow:
         print(f"Expected: current_player_idx should be 1 (Player 1 gets to act)")
         print(f"Actual: current_player_idx is {self.game.current_player_idx}")
         
-        assert self.game.current_player_idx == 1, \
-            f"❌ BUG: After P0 all-in, P1 should be current player! Got {self.game.current_player_idx}"
+        assert self.game.current_player_idx == bb_idx, \
+            f"❌ BUG: After the SB's all-in, the BB should be current player! Got {self.game.current_player_idx}"
         
         assert not self.game.is_betting_round_complete(), \
             "❌ BUG: Betting round should NOT be complete - P1 hasn't acted yet!"
@@ -192,29 +194,24 @@ class TestAllInActionFlow:
         print("="*80)
         
         self.game.start_new_hand()
-        
-        print(f"\nStep 1: Blinds posted, Player 0's turn")
+
+        # Real HU rules: button = SB acts first preflop.
+        sb_idx = self.game.button_position
+        bb_idx = 1 - sb_idx
+
+        print(f"\nStep 1: Blinds posted, SB (seat {sb_idx}) to act")
         print(f"  current_player_idx: {self.game.current_player_idx}")
-        print(f"  Current player: Player {self.game.get_current_player().player_id}")
-        assert self.game.current_player_idx == 0
-        
-        print(f"\nStep 2: Player 0 goes all-in")
-        self.game.execute_action(2, raise_amount=self.game.players[0].stack)
-        
+        assert self.game.current_player_idx == sb_idx
+
+        print(f"\nStep 2: SB goes all-in")
+        self.game.execute_action(2, raise_amount=self.game.get_current_player().stack)
+
         print(f"  After action, current_player_idx: {self.game.current_player_idx}")
-        print(f"  Current player: Player {self.game.get_current_player().player_id}")
-        
-        # Check if advance happened
-        if self.game.current_player_idx != 1:
-            print(f"\n❌ BUG: current_player_idx should be 1, got {self.game.current_player_idx}")
-            print(f"Betting round: {self.game.betting_round.name}")
-            print(f"Betting round complete? {self.game.is_betting_round_complete()}")
-            print(f"Hand complete? {self.game.is_hand_complete()}")
-        
-        assert self.game.current_player_idx == 1, \
-            f"❌ BUG: After P0 all-in, current should be P1, got {self.game.current_player_idx}"
-        
-        print(f"\nStep 3: Player 1 calls")
+
+        assert self.game.current_player_idx == bb_idx, \
+            f"❌ BUG: After SB all-in, current should be the BB, got {self.game.current_player_idx}"
+
+        print(f"\nStep 3: BB calls")
         self.game.execute_action(1)
         
         print(f"  After P1 call:")

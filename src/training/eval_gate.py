@@ -58,6 +58,7 @@ class EvalGate:
         seed: int = 0,
         raise_bins: list[float] | None = None,
         duplicate: bool = True,
+        env_overrides: dict | None = None,
     ):
         if num_hands <= 0:
             raise ValueError("num_hands must be > 0")
@@ -68,6 +69,10 @@ class EvalGate:
         self.big_blind = big_blind
         self.seed = seed
         self.raise_bins = raise_bins
+        # Extra TexasHoldemEnv kwargs (min_raise_multiplier, rake_percent,
+        # rake_cap, ...) so the gate judges candidates under the SAME
+        # table rules they were trained with.
+        self.env_overrides = env_overrides or {}
         # Duplicate (mirrored) scoring: each dealt hand is played twice with
         # the candidate in seat 0 then seat 1, on the IDENTICAL deck. Card
         # luck and any positional/seat advantage both cancel in the sum,
@@ -91,6 +96,7 @@ class EvalGate:
             track_opponents=True,
             learning_agent_id=0,
             raise_bins=self.raise_bins,
+            **self.env_overrides,
         )
 
     def _seed_hand(self, hand_idx: int) -> None:

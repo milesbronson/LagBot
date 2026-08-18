@@ -8,6 +8,36 @@ History of significant changes and fixes to LagBot.
 
 ---
 
+## 2026-08-17: RULES V2 — correctness over compatibility
+
+Backwards compatibility with pre-v2 checkpoints was deliberately dropped
+(owner's call). Every model in the registry trained under the old rules
+and is now a historical artifact; the next lineage
+(`configs/heads_up_real_equity_v1.yaml`) is the first correct-world chain.
+
+- **Real Monte-Carlo equity always on** — the `real_postflop_equity`
+  compatibility flag is gone; `hand_strength` is genuine on every street.
+- **Heads-up rules corrected**: the button posts the small blind, acts
+  first preflop and last post-flop. The old engine had the button in the
+  big blind with inverted post-flop order — every HU hand ever trained or
+  played was positionally backwards.
+- **Betting-round completion rewritten** around an acted-since-last-raise
+  set: the big blind actually gets its option (the old action-count quota
+  closed the round early in any pot with a preflop fold), and all-in
+  run-outs no longer force phantom decisions on dead streets.
+- **Min-raise legality**: an undersized raise via the amount paths is a
+  call (never a silent fold, never a 1-chip re-raise reopening the
+  betting), and a short all-in no longer shrinks the min-raise ladder.
+- **Observation fix**: `pos` is now button-relative (the raw seat index
+  was a constant for the learner — no positional signal at all).
+- Eval gates now mirror the training table rules (`min_raise_multiplier`,
+  rake, all-in availability) via `env_overrides`; under per-episode
+  rotation, `trained_against_ids` and the gate exclusion list cover every
+  card the wrapper ever seated, not just the first draw.
+- Locked in by `tests/test_env/test_rules_v2.py`.
+
+---
+
 ## 2026-08-14: Audit fixes — silent equity bug, eval-gate action space, web UI
 
 **Post-flop hand equity was a constant 0.5 in every observation** (silent

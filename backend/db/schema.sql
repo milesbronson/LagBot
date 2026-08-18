@@ -38,5 +38,8 @@ CREATE TABLE IF NOT EXISTS hand_players (
 );
 
 CREATE INDEX IF NOT EXISTS idx_hands_session ON hands(session_id);
+-- A retried save must not duplicate a hand.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_hands_session_hand
+    ON hands(session_id, hand_number);
 CREATE INDEX IF NOT EXISTS idx_hand_actions_hand ON hand_actions(hand_id);
 CREATE INDEX IF NOT EXISTS idx_hand_players_hand ON hand_players(hand_id);

@@ -258,7 +258,8 @@ class GameState:
         
         self.last_aggressor_idx: Optional[int] = None
         self.num_actions_this_round = 0
-        
+        self.players_acted_this_round: set = set()
+
         # Hand history
         self.hand_history: Optional[HandHistory] = None
     
@@ -290,9 +291,23 @@ class GameState:
                 self.hand_history.record_hole_cards(player.player_id, hole_cards)
         
         self.button_position = (self.button_position + 1) % len(self.players)
-        
-        sb_idx = self._get_next_active_player(self.button_position)
-        bb_idx = self._get_next_active_player(sb_idx)
+        # Dead-button avoidance: never leave the button on a bust seat.
+        for _ in range(len(self.players)):
+            if self.players[self.button_position].stack > 0:
+                break
+            self.button_position = (self.button_position + 1) % len(self.players)
+
+        funded = [p for p in self.players if p.stack > 0]
+        if len(funded) == 2:
+            # Heads-up: the BUTTON posts the small blind and acts first
+            # preflop, last post-flop — real HU rules. (The old code gave
+            # the button the big blind, inverting position for every
+            # heads-up hand ever played or trained.)
+            sb_idx = self.button_position
+            bb_idx = self._get_next_active_player(sb_idx)
+        else:
+            sb_idx = self._get_next_active_player(self.button_position)
+            bb_idx = self._get_next_active_player(sb_idx)
         
         # Record blinds
         self.hand_history.record_blind_action(
@@ -313,10 +328,15 @@ class GameState:
             self.players[bb_idx]
         )
         
+        # Preflop first actor: next after the BB. In heads-up that IS the
+        # button/SB, matching real HU order.
         self.current_player_idx = self._get_next_active_player(bb_idx)
         self.betting_round = BettingRound.PREFLOP
         self.last_aggressor_idx = bb_idx
         self.num_actions_this_round = 0
+        # Who has acted since the last full bet/raise. The BB has NOT
+        # acted by posting — this is what gives the BB its option.
+        self.players_acted_this_round = set()
         
     def _get_next_active_player(self, start_idx: int) -> int:
         """Get the next active player who can act"""
@@ -340,32 +360,39 @@ class GameState:
         return [p for p in self.players if p.is_active]
     
     def is_betting_round_complete(self) -> bool:
-        """Check if the current betting round is complete"""
+        """Check if the current betting round is complete.
+
+        A round is complete when every live, non-all-in player has BOTH
+        acted since the last full bet/raise AND matched the current bet.
+        (The old action-count quota counted folds toward the quota while
+        excluding folded players from it, which denied the big blind its
+        option in any pot with a preflop fold, and forced phantom actions
+        on dead streets when everyone else was all-in.)
+        """
         active_players = self.get_active_players()
-        
+
         if len(active_players) <= 1:
             return True
-        #print("In is_betting_round_complete functions")
-        players_who_can_act = [p for p in active_players if not p.is_all_in]
-        
-        if not players_who_can_act:
-            #print("Betting Round Complete - No Players to Act")
 
+        players_who_can_act = [p for p in active_players if not p.is_all_in]
+
+        if not players_who_can_act:
             return True
-        
-        if self.num_actions_this_round < len(players_who_can_act):
-            return False
-        
+
         current_bet = self.pot_manager.current_bet
-        #print(f"Current Bet {current_bet}")
-        #print("Players: ")
-        #print(players_who_can_act)
+
+        if len(players_who_can_act) == 1:
+            # Everyone else is all-in: the sole live player only has a
+            # decision if there are chips left to call. No phantom
+            # actions on run-out streets.
+            return players_who_can_act[0].current_bet == current_bet
+
         for player in players_who_can_act:
-            #print(f"Player current bet: {player.current_bet}")
-            if player.current_bet != current_bet:
-                #print("Betting Round Not Complete - Not all players matched bet")
+            if player.player_id not in self.players_acted_this_round:
                 return False
-        
+            if player.current_bet != current_bet:
+                return False
+
         return True
     
     def advance_betting_round(self):
@@ -392,9 +419,12 @@ class GameState:
             self.betting_round = BettingRound.SHOWDOWN
             
         self.pot_manager.start_new_betting_round(self.players)
+        # Post-flop first actor: first live seat after the button. In
+        # heads-up (button = SB) that is the BB — correct HU order.
         self.current_player_idx = self._get_next_active_player(self.button_position)
         self.last_aggressor_idx = None
         self.num_actions_this_round = 0
+        self.players_acted_this_round = set()
     
     def _burn_card(self):
         """Burn a card from the deck"""
@@ -408,6 +438,7 @@ class GameState:
         bet amount (to_call + raise_chips), not just the raise portion.
         """
         player = self.get_current_player()
+        bet_before_action = self.pot_manager.current_bet
 
         if action == 0:
             player.fold()
@@ -482,8 +513,14 @@ class GameState:
                 )
         
         self.num_actions_this_round += 1
+        # A bet increase reopens the action: everyone else must respond
+        # again, so the acted-set resets to just the aggressor.
+        if self.pot_manager.current_bet > bet_before_action:
+            self.players_acted_this_round = {player.player_id}
+        else:
+            self.players_acted_this_round.add(player.player_id)
         self.current_player_idx = self._get_next_active_player(self.current_player_idx)
-        
+
         return action_type
     
     def determine_winners(self) -> dict:

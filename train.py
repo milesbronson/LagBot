@@ -176,11 +176,17 @@ def _build_env(env_cfg: dict) -> TexasHoldemEnv:
         reset_stacks_every_n_timesteps=env_cfg.get("reset_stacks_every_n_timesteps"),
         raise_bins=env_cfg.get("raise_bins"),
         track_opponents=True,
-        # Off by default: pre-2026-08 checkpoints were trained on a constant
-        # 0.5 post-flop hand_strength and collapse when fed real equity.
-        # Enable only when starting a fresh lineage.
-        real_postflop_equity=env_cfg.get("real_postflop_equity", False),
     )
+
+
+def _gate_env_overrides(env_cfg: dict) -> dict:
+    """Table rules the eval envs must share with training."""
+    return {
+        "min_raise_multiplier": env_cfg.get("min_raise_multiplier", 1.0),
+        "rake_percent": env_cfg["rake_percent"] if env_cfg.get("rake_enabled") else 0.0,
+        "rake_cap": env_cfg.get("rake_cap", 0),
+        "include_all_in": env_cfg.get("include_all_in", True),
+    }
 
 
 def _run_stratified_gate(
@@ -213,6 +219,7 @@ def _run_stratified_gate(
         seed=strat_cfg.get("seed", 0),
         raise_bins=env_cfg.get("raise_bins"),
         include_anchors=strat_cfg.get("include_anchors", True),
+        env_overrides=_gate_env_overrides(env_cfg),
     )
     result = gate.evaluate(
         candidate=candidate,
@@ -242,6 +249,7 @@ def _run_eval_gate(
         big_blind=env_cfg["big_blind"],
         seed=eval_cfg.get("seed", 0),
         raise_bins=env_cfg.get("raise_bins"),
+        env_overrides=_gate_env_overrides(env_cfg),
     )
     result = gate.evaluate(
         candidate, predecessor,
@@ -464,6 +472,7 @@ def train_one_generation(
             big_blind=env_cfg["big_blind"],
             seed=eval_cfg.get("seed", 0),
             raise_bins=env_cfg.get("raise_bins"),
+            env_overrides=_gate_env_overrides(env_cfg),
         )
 
     callbacks = [save_callback, metrics_callback, profit_callback, critic_callback]
@@ -519,6 +528,17 @@ def train_one_generation(
             )
             return None
 
+    # Under rotation the learner faces every card the wrapper ever seated,
+    # not just the first draw — record (and later gate-exclude) all of
+    # them, or the gate measures memorisation of unlisted opponents.
+    if rotate_per_episode:
+        base_wrapper = wrapped_env
+        while not hasattr(base_wrapper, "card_metadata"):
+            base_wrapper = base_wrapper.env
+        trained_against = sorted(base_wrapper.card_metadata.keys())
+    else:
+        trained_against = [c.id for c in opponent_cards]
+
     card = AgentCard(
         id=run_name,
         name=run_name,
@@ -526,7 +546,7 @@ def train_one_generation(
         path=register_path,
         generation=registry.next_generation(),
         parent_id=resume_from_id,
-        trained_against_ids=[c.id for c in opponent_cards],
+        trained_against_ids=trained_against,
         training_config=train_cfg,
         total_timesteps=train_cfg["total_timesteps"],
         eval_stats=eval_stats,
@@ -544,7 +564,7 @@ def train_one_generation(
         # hands, so it lands in the "unstratified" bucket and the gate can
         # draw it as its own opponent — a mirrored self-match scores ~0
         # and "passes" any negative threshold.
-        training_pool_ids = [c.id for c in opponent_cards] + [card.id]
+        training_pool_ids = list(trained_against) + [card.id]
         passed_strat, strat_result = _run_stratified_gate(
             env_cfg, strat_cfg, card, training_pool_ids, registry,
         )
@@ -618,6 +638,7 @@ def train_one_generation(
             seed=regression_cfg.get("seed", 0),
             include_fixtures=regression_cfg.get("include_fixtures", True),
             raise_bins=env_cfg.get("raise_bins"),
+            env_overrides=_gate_env_overrides(env_cfg),
         )
         reg_result = reg.evaluate(card, registry)
         print(reg.report(reg_result))

@@ -90,16 +90,18 @@ class TestPotManager:
         assert players[0].stack == 970
         assert pot_manager.current_bet == 30
     
-    def test_place_bet_fold(self, pot_manager, players):
-        """Test folding"""
+    def test_place_bet_undersized_becomes_call(self, pot_manager, players):
+        """An amount below to_call is treated as a call, never a silent
+        fold — folding is an explicit action, and no card room mucks a
+        hand over a malformed bet size."""
         pot_manager.start_new_hand()
         pot_manager.current_bet = 10
-        
-        amount, action = pot_manager.place_bet(players[0], 0)
-        
-        assert amount == 0
-        assert action == "fold"
-        assert not players[0].is_active
+
+        amount, action = pot_manager.place_bet(players[0], 4)
+
+        assert amount == 10
+        assert action == "call"
+        assert players[0].is_active
     
     def test_place_bet_check(self, pot_manager, players):
         """Test checking"""

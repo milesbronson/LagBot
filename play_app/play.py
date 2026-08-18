@@ -117,9 +117,13 @@ def action_label(action: int, env: TexasHoldemEnv) -> str:
         return f"All-in (${me.stack})"
     bin_idx = action - 2
     frac = env.raise_bins[bin_idx]
-    pot = env.game_state.pot_manager.get_pot_total()
-    chips = int(round(frac * pot))
-    return f"Raise ${chips} ({frac:.1f}× pot)"
+    # Ask the env for the EXACT chips this action will commit (BB rounding,
+    # min-raise floor, to_call added, stack clamp) — a naive frac*pot label
+    # showed a different number than the table then took.
+    _, total = env._validate_and_convert_action(action)
+    if total is None:
+        return f"Raise ({frac:.1f}× pot)"
+    return f"Raise ${total} ({frac:.1f}× pot)"
 
 
 def pseudo_harmonic_translate(

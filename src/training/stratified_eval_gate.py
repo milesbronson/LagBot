@@ -186,6 +186,7 @@ class StratifiedEvalGate:
         min_strata_to_pass: int = 5,
         aggregate_threshold_mbb_per_100: float = -200.0,
         include_anchors: bool = True,
+        env_overrides: Optional[dict] = None,
     ):
         if num_hands <= 0:
             raise ValueError("num_hands must be > 0")
@@ -197,6 +198,7 @@ class StratifiedEvalGate:
         self.big_blind = big_blind
         self.seed = seed
         self.raise_bins = raise_bins
+        self.env_overrides = env_overrides or {}
         self.cards_per_stratum = cards_per_stratum
         self.min_strata_to_pass = min_strata_to_pass
         self.include_anchors = include_anchors
@@ -253,6 +255,7 @@ class StratifiedEvalGate:
                     big_blind=self.big_blind,
                     seed=self.seed + matchup_seed,
                     raise_bins=self.raise_bins,
+                    env_overrides=self.env_overrides,
                 )
                 eval_result: EvalResult = gate.evaluate(
                     candidate,

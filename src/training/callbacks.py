@@ -229,11 +229,16 @@ class MetricsCallback(BaseCallback):
                 print(f"[{self.num_timesteps}] No episodes completed yet")
             return
 
-        # Calculate statistics
-        avg_reward = np.mean(self.episode_rewards)
-        max_reward = np.max(self.episode_rewards)
-        min_reward = np.min(self.episode_rewards)
-        
+        # Calculate statistics over the SAME window as win_rate (episodes
+        # since the last log). A lifetime mean flattens over long runs and
+        # hides late-training collapse next to a windowed win_rate.
+        window = self.episode_rewards[self._last_logged_episode_idx:]
+        if not window:
+            window = self.episode_rewards
+        avg_reward = np.mean(window)
+        max_reward = np.max(window)
+        min_reward = np.min(window)
+
         win_rate = self.episode_wins / max(self.episode_count, 1)
 
         # Action distribution statistics
@@ -621,6 +626,7 @@ class BestCheckpointCallback(BaseCallback):
         big_blind: int = 10,
         seed: int = 0,
         raise_bins: Optional[List[float]] = None,
+        env_overrides: Optional[dict] = None,
         verbose: int = 1,
     ):
         super().__init__(verbose)
@@ -637,6 +643,7 @@ class BestCheckpointCallback(BaseCallback):
         # 3-bin default coerces every 8-bin action >= 6 to a call and
         # scores checkpoints on a distorted match.
         self.raise_bins = raise_bins
+        self.env_overrides = env_overrides or {}
         self.best_mbb_per_100: float = -float("inf")
         self.best_steps: Optional[int] = None
         self.best_stats: Optional[dict] = None
@@ -664,6 +671,7 @@ class BestCheckpointCallback(BaseCallback):
             big_blind=self.big_blind,
             seed=self.seed,
             raise_bins=self.raise_bins,
+            env_overrides=self.env_overrides,
         )
         result = gate.evaluate(
             candidate, predecessor,
